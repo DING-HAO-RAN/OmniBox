@@ -183,7 +183,7 @@
  * 支持设定程序名称、运行路径、启动参数、工作目录、后台静默模式与一键启动激活状态
  */
 
-import { computed, watch, reactive, onMounted, onUnmounted } from 'vue';
+import { computed, watch, reactive, onUnmounted } from 'vue';
 import { Rocket, X, EyeOff, Play } from 'lucide-vue-next';
 import type { LaunchItem } from '../../types/module';
 
@@ -209,13 +209,9 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
-  if (props.show) {
-    window.addEventListener('keydown', handleGlobalKeydown);
-  }
-});
-
+// 注意：键盘监听已由下方 watch(props.show, { immediate: true }) 全权负责动态增删，无需在 onMounted 中重复绑定
 onUnmounted(() => {
+  // 组件销毁时安全清理全局监听器，防止内存泄漏
   window.removeEventListener('keydown', handleGlobalKeydown);
 });
 

@@ -263,6 +263,8 @@ const memoryInfo = ref<MemoryStatus>({
 // 加载与清理执行中状态
 const isFetching = ref(false);
 const isCleaning = ref(false);
+// 在途请求互斥守卫，防止极端弱环境下高频并发请求堆叠
+let isFetchingInFlight = false;
 
 // 最近一次清理优化结果
 const lastCleanResult = ref<CleanResult | null>(null);
@@ -306,6 +308,10 @@ const healthScoreColor = computed(() => {
  * @param silent 是否静默刷新 (非静默时可激活按钮动画)
  */
 async function fetchMemoryStatus(silent = false) {
+  // 在途互斥守卫：若上一轮请求尚未结算，直接跳过，杜绝高频并发堆积
+  if (isFetchingInFlight) return;
+  isFetchingInFlight = true;
+
   if (!silent) {
     isFetching.value = true;
   }
@@ -334,6 +340,7 @@ async function fetchMemoryStatus(silent = false) {
     if (!silent) {
       isFetching.value = false;
     }
+    isFetchingInFlight = false;
   }
 }
 
@@ -422,8 +429,8 @@ onMounted(async () => {
 
   // 开启 3 秒一次的静默轮询更新
   pollIntervalId = setInterval(() => {
-    // 若正在清理中则暂不打扰
-    if (!isCleaning.value) {
+    // 若正在清理中或已有在途请求未完成则跳过此轮轮询
+    if (!isCleaning.value && !isFetchingInFlight) {
       fetchMemoryStatus(true);
     }
   }, 3000);
