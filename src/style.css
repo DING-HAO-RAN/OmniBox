@@ -2,17 +2,139 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 全局基底样式与字体设定 */
+/* ==========================================================================
+   Windows 11 Fluent Design 核心设计变量与基底规范
+   ========================================================================== */
 :root {
-  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+  /* 品牌电光蓝与高亮渐变色 */
+  --fluent-accent: #0078d4;
+  --fluent-accent-hover: #1084d9;
+  --fluent-accent-active: #006cc1;
+  --fluent-accent-subtle: rgba(0, 120, 212, 0.15);
+  --fluent-accent-glow: rgba(0, 120, 212, 0.25);
+
+  /* 云母与亚克力暗黑质感底色 */
+  --fluent-bg: #0d1117;
+  --fluent-surface: #161b22;
+  --fluent-surface-elevated: #1f242c;
+  --fluent-acrylic: rgba(13, 17, 23, 0.78);
+
+  /* 细微高光与边框设定 */
+  --fluent-border-subtle: rgba(255, 255, 255, 0.06);
+  --fluent-border: rgba(255, 255, 255, 0.1);
+  --fluent-border-hover: rgba(255, 255, 255, 0.18);
+
+  /* 字体族系 */
+  font-family: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* 全局基底布局约束 */
 body {
   margin: 0;
   padding: 0;
+  width: 100vw;
+  height: 100vh;
   overflow: hidden;
   user-select: none;
-  background-color: #0d1117;
+  background-color: var(--fluent-bg);
   color: #f3f4f6;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   Tauri 原生窗口无缝拖拽区域规范
+   ========================================================================== */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+/* 交互组件禁止继承拖拽行为，避免点击失效 */
+button,
+a,
+input,
+select,
+textarea,
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ==========================================================================
+   Windows 11 极细拟态现代滚动条
+   ========================================================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.win11-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+/* ==========================================================================
+   Fluent 视图模块切换过渡动效
+   ========================================================================== */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* ==========================================================================
+   Fluent 常用拟态原子类拓展
+   ========================================================================== */
+@layer utilities {
+  /* 亚克力磨砂背景面板 */
+  .fluent-acrylic {
+    background-color: var(--fluent-acrylic);
+    backdrop-filter: blur(24px) saturate(140%);
+    -webkit-backdrop-filter: blur(24px) saturate(140%);
+  }
+
+  /* 现代卡片微边框与阴影 */
+  .fluent-card {
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--fluent-border);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .fluent-card:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: var(--fluent-border-hover);
+  }
+
+  /* 电光蓝品牌渐变文本 */
+  .fluent-gradient-text {
+    background: linear-gradient(135deg, #60a5fa 0%, #38bdf8 50%, #93c5fd 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
 }
