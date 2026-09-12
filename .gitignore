@@ -2,12 +2,18 @@
 /src-tauri/target
 /target
 Cargo.lock
+.cargo/
+.cargo-home/
+
+
 
 # Node
 node_modules
 dist
 dist-ssr
 *.local
+.npm-cache
+
 
 # Editor & OS
 .vscode/*
