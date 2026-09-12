@@ -1,5 +1,7 @@
 // OmniBox 核心库入口
 
+pub mod system;
+
 /// 启动 Tauri 桌面应用程序运行时
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
