@@ -8,7 +8,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "check:rust": "powershell -Command \"$env:CARGO_HOME = \\\"$pwd\\.cargo-home\\\"; cargo check --manifest-path src-tauri/Cargo.toml\""
+    "check:rust": "powershell -Command \"$env:CARGO_HOME = \\\"$pwd\\.cargo-home\\\"; cargo check --manifest-path src-tauri/Cargo.toml\"",
+    "build:exe": "npm run build && powershell -Command \"$env:CARGO_HOME = \\\"$pwd\\.cargo-home\\\"; cargo build --release --manifest-path src-tauri/Cargo.toml && Copy-Item -Path src-tauri/target/release/omnibox.exe -Destination OmniBox-万能工具箱.exe -Force\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
