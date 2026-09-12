@@ -11,8 +11,23 @@
 
       <!-- 主工作区内容插槽与视图宿主 -->
       <main class="flex-1 h-full min-w-0 overflow-hidden relative bg-[#0e131b]">
-        <!-- 页面切换平滑过渡动效 -->
-        <RouterViewContainer />
+        <!-- 页面切换平滑过渡动效：标准 Vue 3 Transition 模板实现 -->
+        <Transition name="fade-slide" mode="out-in">
+          <div
+            v-if="activeTool"
+            :key="activeTool.id"
+            class="h-full w-full overflow-hidden"
+          >
+            <component :is="activeTool.component" />
+          </div>
+          <div
+            v-else
+            key="empty-state"
+            class="h-full flex items-center justify-center text-gray-500"
+          >
+            未选择任何工具模块
+          </div>
+        </Transition>
       </main>
     </div>
   </div>
@@ -22,45 +37,10 @@
 /**
  * @file AppShell.vue
  * @description Windows 11 Fluent 桌面客户端核心外壳系统
- * 集成 HeaderBar、Sidebar 与可插拔的模块化视图切换器
+ * 集成 HeaderBar、Sidebar 与标准 Transition 视图动态切换插槽
  */
 
-import { defineComponent, h } from 'vue';
 import HeaderBar from './HeaderBar.vue';
 import Sidebar from './Sidebar.vue';
 import { activeTool } from '../../registry';
-
-/**
- * 内部模块视图过渡切换器组件
- */
-const RouterViewContainer = defineComponent({
-  name: 'RouterViewContainer',
-  setup() {
-    return () => {
-      const tool = activeTool.value;
-      if (!tool) {
-        return h('div', { class: 'h-full flex items-center justify-center text-gray-500' }, '未选择任何工具模块');
-      }
-
-      // 渲染带过渡动画的动态插槽组件
-      return h(
-        'transition',
-        {
-          name: 'fade-slide',
-          mode: 'out-in',
-        },
-        () => [
-          h(
-            'div',
-            {
-              key: tool.id,
-              class: 'h-full w-full overflow-hidden',
-            },
-            [h(tool.component)]
-          ),
-        ]
-      );
-    };
-  },
-});
 </script>

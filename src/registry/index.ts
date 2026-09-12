@@ -8,6 +8,7 @@ import { ref, computed, markRaw, h } from 'vue';
 import type { ToolModule, ToolCategory } from '../types/module';
 import OverviewView from '../components/views/OverviewView.vue';
 import PlaceholderView from '../components/views/PlaceholderView.vue';
+import LauncherView from '../views/LauncherView.vue';
 
 /**
  * 分类元数据信息定义
@@ -135,16 +136,13 @@ registerTool({
   order: 2,
 });
 
-// 3. 一键启动器占位 (Task 5 接入)
+// 3. 一键启动器视图 (Task 5 已正式接入)
 registerTool({
   id: 'launcher',
   title: '应用启动器',
   description: '一键并行批量拉起目标工作环境',
   iconName: 'Rocket',
   category: 'efficiency',
-  component: h(PlaceholderView, {
-    title: '快捷启动器调度中心',
-    description: '即将接入可配置启动项目录，支持静默启动与批处理并发管理。',
-  }),
+  component: LauncherView,
   order: 3,
 });

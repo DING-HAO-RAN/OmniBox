@@ -40,18 +40,18 @@
               v-for="tool in getToolsByCategory(cat.id)"
               :key="tool.id"
               @click="setActiveTool(tool.id)"
-              class="group relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 text-left"
+              class="group relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 text-left border"
               :class="[
                 activeToolId === tool.id
-                  ? 'bg-white/[0.08] text-white font-semibold shadow-sm border border-white/10'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/[0.04]'
+                  ? 'bg-white/[0.08] text-white font-semibold shadow-sm border-white/10'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/[0.04] border-transparent'
               ]"
               :title="tool.description"
             >
               <!-- Windows 11 标志性激活左侧药丸指示条 -->
               <span
                 v-if="activeToolId === tool.id"
-                class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-blue-500 shadow-sm shadow-blue-500/50"
+                class="absolute left-1 top-1/2 -translate-y-1/2 h-4 w-1 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]"
               ></span>
 
               <!-- 工具图标 -->
