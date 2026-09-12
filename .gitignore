@@ -1,9 +1,9 @@
 # Rust
 /src-tauri/target
 /target
-Cargo.lock
 .cargo/
 .cargo-home/
+
 
 
 
