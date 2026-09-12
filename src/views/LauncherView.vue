@@ -248,15 +248,15 @@ const itemPendingDelete = ref<LaunchItem | null>(null);
 // 计算属性与过滤
 // ----------------------------------------------------
 
-/** 过滤后的启动项列表 (按搜索词匹配名称、路径或参数) */
+/** 过滤后的启动项列表 (按搜索词匹配名称、路径或参数，增强空值安全防御) */
 const filteredItems = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
   if (!q) return items.value;
   return items.value.filter(
     (item) =>
-      item.name.toLowerCase().includes(q) ||
-      item.path.toLowerCase().includes(q) ||
-      item.args.toLowerCase().includes(q)
+      (item.name || '').toLowerCase().includes(q) ||
+      (item.path || '').toLowerCase().includes(q) ||
+      (item.args || '').toLowerCase().includes(q)
   );
 });
 

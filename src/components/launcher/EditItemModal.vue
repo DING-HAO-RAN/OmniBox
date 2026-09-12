@@ -183,7 +183,7 @@
  * 支持设定程序名称、运行路径、启动参数、工作目录、后台静默模式与一键启动激活状态
  */
 
-import { computed, watch, reactive } from 'vue';
+import { computed, watch, reactive, onMounted, onUnmounted } from 'vue';
 import { Rocket, X, EyeOff, Play } from 'lucide-vue-next';
 import type { LaunchItem } from '../../types/module';
 
@@ -201,6 +201,23 @@ const emit = defineEmits<{
 
 // 是否为编辑现有启动项
 const isEditMode = computed(() => !!props.item);
+
+// 全局 Esc 快捷键关闭监听
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.show) {
+    handleClose();
+  }
+}
+
+onMounted(() => {
+  if (props.show) {
+    window.addEventListener('keydown', handleGlobalKeydown);
+  }
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown);
+});
 
 // 表单响应式数据
 const form = reactive<{
@@ -227,11 +244,12 @@ const errors = reactive<{
   path?: string;
 }>({});
 
-// 监听弹窗打开状态，及时填充或重置表单内容
+// 监听弹窗打开状态，及时填充或重置表单内容及事件绑定
 watch(
   () => props.show,
   (visible) => {
     if (visible) {
+      window.addEventListener('keydown', handleGlobalKeydown);
       errors.name = undefined;
       errors.path = undefined;
       if (props.item) {
@@ -252,6 +270,8 @@ watch(
         form.silent = false;
         form.enabled = true;
       }
+    } else {
+      window.removeEventListener('keydown', handleGlobalKeydown);
     }
   },
   { immediate: true }

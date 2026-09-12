@@ -4,11 +4,11 @@
  * 统一管理所有工具插件的元数据、插槽组件以及视图切换状态
  */
 
-import { ref, computed, markRaw, h } from 'vue';
+import { ref, computed, markRaw } from 'vue';
 import type { ToolModule, ToolCategory } from '../types/module';
 import OverviewView from '../components/views/OverviewView.vue';
-import PlaceholderView from '../components/views/PlaceholderView.vue';
 import LauncherView from '../views/LauncherView.vue';
+import MemoryCleanerView from '../views/MemoryCleanerView.vue';
 
 /**
  * 分类元数据信息定义
@@ -122,17 +122,14 @@ registerTool({
   order: 1,
 });
 
-// 2. 内存优化器占位 (Task 6 接入)
+// 2. 内存优化器视图 (Task 6 接入)
 registerTool({
   id: 'memory',
   title: '内存优化',
   description: 'Windows 进程工作集深度释放与监控',
   iconName: 'Cpu',
   category: 'system',
-  component: h(PlaceholderView, {
-    title: '系统内存优化器',
-    description: '即将接入 Win32 K32EmptyWorkingSet 原生修剪能力，提供毫秒级进程释放。',
-  }),
+  component: MemoryCleanerView,
   order: 2,
 });
 
