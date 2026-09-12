@@ -1,0 +1,27 @@
+# Rust
+/src-tauri/target
+/target
+Cargo.lock
+
+# Node
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor & OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db
+[Dd]esktop.ini
+
+# Logs & temp
+*.log
+.tmp/
+tmp/
