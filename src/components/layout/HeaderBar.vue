@@ -2,7 +2,8 @@
   <!-- 顶部标题栏：支持 Windows 原生拖拽与系统控制按钮 -->
   <header
     data-tauri-drag-region
-    class="h-10 w-full flex-shrink-0 flex items-center justify-between px-3 bg-[#0d1117]/90 backdrop-blur-md border-b border-white/10 select-none z-30"
+    @dblclick="handleHeaderDblClick"
+    class="h-10 w-full flex-shrink-0 flex items-center justify-between px-3 bg-[#0d1117]/90 backdrop-blur-md border-b border-white/10 select-none z-30 cursor-default"
   >
     <!-- 左侧：应用标识与当前活跃模块面包屑 -->
     <div data-tauri-drag-region class="flex items-center gap-2.5 min-w-0">
@@ -189,6 +190,15 @@ async function handleClose() {
       console.error('关闭窗口失败:', err);
     }
   }
+}
+
+/**
+ * 标题栏空白区域双击最大化/还原
+ */
+function handleHeaderDblClick(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (target.closest('.no-drag')) return;
+  handleToggleMaximize();
 }
 
 onMounted(() => {
