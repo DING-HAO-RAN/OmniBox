@@ -3,13 +3,17 @@
 //! 负责在用户标准应用配置目录下安全存储与加载 `launcher_items.json`，
 //! 并提供初次运行时的默认启动项回退机制。
 
-use crate::system::types::LaunchItem;
+use crate::system::types::{AppSettings, CloakedItem, LaunchItem};
 use std::fs;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 /// 启动项存储文件名
 pub const LAUNCHER_CONFIG_FILE: &str = "launcher_items.json";
+/// 深度隐藏文件记录文件名
+pub const CLOAKED_ITEMS_FILE: &str = "cloaked_items.json";
+/// 应用程序全局设置文件名
+pub const APP_SETTINGS_FILE: &str = "app_settings.json";
 
 /// 生成友好且安全的 Windows 通用系统工具默认启动项列表
 ///
@@ -106,6 +110,92 @@ pub fn save_launcher_items(app: &AppHandle, items: &[LaunchItem]) -> Result<(), 
 
     let file_path = config_dir.join(LAUNCHER_CONFIG_FILE);
     save_items_to_path(&file_path, items)
+}
+
+/// 读取深度隐藏文件记录列表
+pub fn load_cloaked_items(app: &AppHandle) -> Result<Vec<CloakedItem>, String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取应用配置目录失败: {}", e))?;
+
+    let file_path = config_dir.join(CLOAKED_ITEMS_FILE);
+    if !file_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&file_path)
+        .map_err(|e| format!("读取隐藏文件记录失败: {e}"))?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let items: Vec<CloakedItem> = serde_json::from_str(&content)
+        .map_err(|e| format!("反序列化隐藏文件记录失败: {e}"))?;
+    Ok(items)
+}
+
+/// 保存深度隐藏文件记录列表
+pub fn save_cloaked_items(app: &AppHandle, items: &[CloakedItem]) -> Result<(), String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取应用配置目录失败: {}", e))?;
+
+    let file_path = config_dir.join(CLOAKED_ITEMS_FILE);
+    if let Some(parent) = file_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let json_str = serde_json::to_string_pretty(items)
+        .map_err(|e| format!("序列化隐藏文件记录失败: {e}"))?;
+    fs::write(&file_path, json_str)
+        .map_err(|e| format!("写入隐藏文件记录失败: {e}"))?;
+    Ok(())
+}
+
+/// 读取应用程序通用设置
+pub fn load_app_settings(app: &AppHandle) -> Result<AppSettings, String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取应用配置目录失败: {}", e))?;
+
+    let file_path = config_dir.join(APP_SETTINGS_FILE);
+    if !file_path.exists() {
+        let defaults = AppSettings::default();
+        let _ = save_app_settings(app, &defaults);
+        return Ok(defaults);
+    }
+
+    let content = fs::read_to_string(&file_path)
+        .map_err(|e| format!("读取应用程序设置失败: {e}"))?;
+    if content.trim().is_empty() {
+        return Ok(AppSettings::default());
+    }
+
+    let settings: AppSettings = serde_json::from_str(&content)
+        .map_err(|e| format!("反序列化应用程序设置失败: {e}"))?;
+    Ok(settings)
+}
+
+/// 保存应用程序通用设置
+pub fn save_app_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取应用配置目录失败: {}", e))?;
+
+    let file_path = config_dir.join(APP_SETTINGS_FILE);
+    if let Some(parent) = file_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let json_str = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("序列化应用程序设置失败: {e}"))?;
+    fs::write(&file_path, json_str)
+        .map_err(|e| format!("写入应用程序设置失败: {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

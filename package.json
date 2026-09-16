@@ -6,15 +6,19 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "test:unit": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri",
     "check:rust": "powershell -Command \"$env:CARGO_HOME = \\\"$pwd\\.cargo-home\\\"; cargo check --manifest-path src-tauri/Cargo.toml\"",
-    "build:exe": "npm run build && powershell -Command \"$env:CARGO_HOME = \\\"$pwd\\.cargo-home\\\"; cargo build --release --manifest-path src-tauri/Cargo.toml && Copy-Item -Path src-tauri/target/release/omnibox.exe -Destination OmniBox-万能工具箱.exe -Force\""
+    "build:exe": "powershell -Command \"$env:CARGO_HOME = \\\"$pwd\\.cargo-home\\\"; npx tauri build --no-bundle && Copy-Item -Path src-tauri/target/release/omnibox.exe -Destination OmniBox-万能工具箱.exe -Force && Copy-Item -Path src-tauri/target/release/omnibox.exe -Destination release/OmniBox-万能工具箱.exe -Force\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "dompurify": "^3.4.15",
+    "highlight.js": "^11.12.0",
     "lucide-vue-next": "^0.475.0",
+    "marked": "^18.0.13",
     "vue": "^3.5.13"
   },
   "devDependencies": {
@@ -22,10 +26,12 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "autoprefixer": "^10.4.20",
     "esbuild-wasm": "^0.25.0",
+    "jsdom": "^30.0.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.2",
     "vite": "^6.0.7",
+    "vitest": "^5.0.0",
     "vue-tsc": "^2.2.0"
   },
   "overrides": {

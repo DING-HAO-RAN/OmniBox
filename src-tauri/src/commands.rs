@@ -3,8 +3,63 @@
 //! 暴露供前端 Vue 界面调用的系统管理与启动项调度 Commands。
 
 use crate::storage;
-use crate::system::types::{CleanResult, LaunchItem, MemoryStatus};
+use crate::system::types::{AppSettings, CleanResult, CloakedItem, LaunchItem, MemoryStatus};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Markdown 文档读写结果
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkdownDocument {
+    pub path: String,
+    pub content: String,
+}
+
+/// 本地图片内容，前端会转换成 data URL 供预览和 PDF 导出使用
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkdownImageData {
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
+        .unwrap_or(false)
+}
+
+fn ensure_markdown_path(path: &Path) -> Result<(), String> {
+    if is_markdown_path(path) {
+        Ok(())
+    } else {
+        Err("只支持 .md 或 .markdown 文件。".to_string())
+    }
+}
+
+fn canonical_document_parent(path: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let document_path =
+        fs::canonicalize(path).map_err(|error| format!("无法定位 Markdown 文档：{error}"))?;
+    let document_parent = document_path
+        .parent()
+        .ok_or_else(|| "Markdown 文档缺少有效目录。".to_string())?
+        .to_path_buf();
+    Ok((document_path, document_parent))
+}
+
+fn image_mime_type(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
 
 /// 批量执行启动项的单项运行结果
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -104,9 +159,452 @@ pub fn save_launcher_config(app: tauri::AppHandle, items: Vec<LaunchItem>) -> Re
     storage::save_launcher_items(&app, &items)
 }
 
+// ==========================================
+// 窗口控制系统命令（直接通过 Rust 原生窗口句柄操作）
+// ==========================================
+
+/// 最小化当前主窗口
+#[tauri::command]
+pub fn app_minimize_window(window: tauri::Window) -> Result<(), String> {
+    window.minimize().map_err(|e| format!("最小化窗口失败: {e}"))
+}
+
+/// 切换当前窗口最大化/还原状态
+#[tauri::command]
+pub fn app_toggle_maximize_window(window: tauri::Window) -> Result<bool, String> {
+    let is_max = window.is_maximized().map_err(|e| format!("获取最大化状态失败: {e}"))?;
+    if is_max {
+        window.unmaximize().map_err(|e| format!("还原窗口失败: {e}"))?;
+        Ok(false)
+    } else {
+        window.maximize().map_err(|e| format!("最大化窗口失败: {e}"))?;
+        Ok(true)
+    }
+}
+
+/// 关闭当前窗口
+#[tauri::command]
+pub fn app_close_window(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| format!("关闭窗口失败: {e}"))
+}
+
+/// 查询当前窗口是否处于最大化状态
+#[tauri::command]
+pub fn app_is_maximized(window: tauri::Window) -> Result<bool, String> {
+    window.is_maximized().map_err(|e| format!("查询最大化状态失败: {e}"))
+}
+
+// ==========================================
+// 系统设置与权限管理命令
+// ==========================================
+
+/// 检查当前程序是否已获取管理员权限
+#[tauri::command]
+pub fn get_admin_status() -> Result<bool, String> {
+    Ok(crate::system::memory::is_running_as_admin())
+}
+
+/// 触发以管理员身份重新启动当前程序
+#[tauri::command]
+pub fn request_restart_as_admin() -> Result<(), String> {
+    crate::system::settings::restart_as_admin()
+}
+
+/// 加载应用程序全局设置
+#[tauri::command]
+pub fn get_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
+    let mut settings = storage::load_app_settings(&app)?;
+    // 与 Windows 注册表开机自启真实状态保持同步
+    if let Ok(reg_auto_start) = crate::system::settings::get_auto_start_status() {
+        settings.auto_start = reg_auto_start;
+    }
+    Ok(settings)
+}
+
+/// 更新并保存应用程序全局设置
+#[tauri::command]
+pub fn update_app_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
+    let _ = crate::system::settings::set_auto_start_status(settings.auto_start);
+    storage::save_app_settings(&app, &settings)
+}
+
+// ==========================================
+// 深度隐藏文件/文件夹管理器命令
+// ==========================================
+
+/// 对指定文件或文件夹施加系统级深度隐藏 (Super Hidden)，并登记到隐藏清单中
+#[tauri::command]
+pub fn cloak_file_or_dir(
+    app: tauri::AppHandle,
+    path: String,
+    note: Option<String>,
+) -> Result<CloakedItem, String> {
+    let trimmed_path = path.trim().trim_matches('"');
+    let target = Path::new(trimmed_path);
+    if !target.exists() {
+        return Err(format!("目标路径不存在: {trimmed_path}"));
+    }
+
+    let is_dir = target.is_dir();
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| trimmed_path.to_string());
+
+    // 施加系统级隐身
+    crate::system::cloaker::cloak_path(trimmed_path)?;
+
+    let mut list = storage::load_cloaked_items(&app)?;
+    let id = format!("cloak-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+
+    // 如果列表中已存在相同路径，则更新状态，否则新增
+    if let Some(existing) = list.iter_mut().find(|item| item.path.eq_ignore_ascii_case(trimmed_path)) {
+        existing.is_cloaked = true;
+        if let Some(n) = note {
+            existing.note = n;
+        }
+        let result = existing.clone();
+        storage::save_cloaked_items(&app, &list)?;
+        return Ok(result);
+    }
+
+    let new_item = CloakedItem {
+        id,
+        name,
+        path: trimmed_path.to_string(),
+        is_dir,
+        added_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+        is_cloaked: true,
+        note: note.unwrap_or_default(),
+    };
+
+    list.push(new_item.clone());
+    storage::save_cloaked_items(&app, &list)?;
+
+    Ok(new_item)
+}
+
+/// 解除指定条目的深度隐藏状态，恢复正常可见
+#[tauri::command]
+pub fn uncloak_file_or_dir(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let mut list = storage::load_cloaked_items(&app)?;
+    let item = list.iter_mut().find(|i| i.id == id).ok_or_else(|| "未找到指定的隐藏记录".to_string())?;
+
+    crate::system::cloaker::uncloak_path(&item.path)?;
+    item.is_cloaked = false;
+
+    storage::save_cloaked_items(&app, &list)?;
+    Ok(())
+}
+
+/// 重新对已记录的项目施加深度隐藏
+#[tauri::command]
+pub fn recloak_file_or_dir(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let mut list = storage::load_cloaked_items(&app)?;
+    let item = list.iter_mut().find(|i| i.id == id).ok_or_else(|| "未找到指定的记录".to_string())?;
+
+    crate::system::cloaker::cloak_path(&item.path)?;
+    item.is_cloaked = true;
+
+    storage::save_cloaked_items(&app, &list)?;
+    Ok(())
+}
+
+/// 获取所有已登记的深度隐形项目列表（会自动校准实际磁盘属性状态）
+#[tauri::command]
+pub fn load_cloaked_list(app: tauri::AppHandle) -> Result<Vec<CloakedItem>, String> {
+    let mut list = storage::load_cloaked_items(&app)?;
+    for item in list.iter_mut() {
+        if let Ok(is_cloaked) = crate::system::cloaker::is_path_cloaked(&item.path) {
+            item.is_cloaked = is_cloaked;
+        }
+    }
+    let _ = storage::save_cloaked_items(&app, &list);
+    Ok(list)
+}
+
+/// 移除隐藏记录（若当前仍为隐藏，会自动先解除隐藏，避免用户找不到文件）
+#[tauri::command]
+pub fn remove_cloaked_record(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let mut list = storage::load_cloaked_items(&app)?;
+    if let Some(pos) = list.iter().position(|i| i.id == id) {
+        let item = &list[pos];
+        if item.is_cloaked {
+            let _ = crate::system::cloaker::uncloak_path(&item.path);
+        }
+        list.remove(pos);
+        storage::save_cloaked_items(&app, &list)?;
+    }
+    Ok(())
+}
+
+/// 核心联动：将隐藏的文件一键发送至“快速启动器”
+/// 用户在桌面上彻底隐藏该文件后，在 OmniBox 启动器中依然可以随时一键启动！
+#[tauri::command]
+pub fn send_cloaked_to_launcher(
+    app: tauri::AppHandle,
+    id: String,
+    silent: bool,
+) -> Result<LaunchItem, String> {
+    let list = storage::load_cloaked_items(&app)?;
+    let cloaked = list.iter().find(|i| i.id == id).ok_or_else(|| "未找到指定隐藏项".to_string())?;
+
+    let mut launchers = storage::load_launcher_items(&app)?;
+
+    // 检查是否已有相同路径
+    if let Some(existing) = launchers.iter().find(|l| l.path.eq_ignore_ascii_case(&cloaked.path)) {
+        return Ok(existing.clone());
+    }
+
+    let new_launch = LaunchItem {
+        id: format!("launch-from-cloak-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()),
+        name: format!("🔒 {}", cloaked.name),
+        path: cloaked.path.clone(),
+        args: "".to_string(),
+        work_dir: Path::new(&cloaked.path).parent().map(|p| p.to_string_lossy().into_owned()),
+        silent,
+        enabled: true,
+    };
+
+    launchers.push(new_launch.clone());
+    storage::save_launcher_items(&app, &launchers)?;
+
+    Ok(new_launch)
+}
+
+/// 弹出 Windows 原生选择文件对话框
+#[tauri::command]
+pub fn choose_any_file() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        Ok(choose_file_path(FileDialogMode::OpenAny))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// 打开 Markdown 文件并返回规范化路径与 UTF-8 文本。
+#[tauri::command]
+pub fn read_markdown_file(path: String) -> Result<MarkdownDocument, String> {
+    let requested_path = PathBuf::from(path);
+    ensure_markdown_path(&requested_path)?;
+    let document_path = fs::canonicalize(&requested_path)
+        .map_err(|error| format!("无法打开 Markdown 文件：{error}"))?;
+    let content = fs::read_to_string(&document_path)
+        .map_err(|error| format!("Markdown 文件不是有效的 UTF-8 文本，或无法读取：{error}"))?;
+
+    Ok(MarkdownDocument {
+        path: document_path.to_string_lossy().into_owned(),
+        content,
+    })
+}
+
+/// 保存 Markdown 文本；目标文件必须使用 .md 或 .markdown 扩展名。
+#[tauri::command]
+pub fn save_markdown_file(path: String, content: String) -> Result<MarkdownDocument, String> {
+    let requested_path = PathBuf::from(path);
+    ensure_markdown_path(&requested_path)?;
+    let parent = requested_path
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .ok_or_else(|| "Markdown 文件缺少有效目录。".to_string())?;
+    let canonical_parent =
+        fs::canonicalize(parent).map_err(|error| format!("无法写入 Markdown 所在目录：{error}"))?;
+    let file_name = requested_path
+        .file_name()
+        .ok_or_else(|| "Markdown 文件缺少文件名。".to_string())?;
+    let document_path = canonical_parent.join(file_name);
+
+    fs::write(&document_path, content.as_bytes())
+        .map_err(|error| format!("保存 Markdown 文件失败：{error}"))?;
+
+    Ok(MarkdownDocument {
+        path: document_path.to_string_lossy().into_owned(),
+        content,
+    })
+}
+
+/// 读取与当前 Markdown 文档位于同一目录下的图片。
+#[tauri::command]
+pub fn read_markdown_image(
+    document_path: String,
+    relative_path: String,
+) -> Result<MarkdownImageData, String> {
+    let (document_path, document_parent) = canonical_document_parent(Path::new(&document_path))?;
+    ensure_markdown_path(&document_path)?;
+
+    let relative_image_path = Path::new(&relative_path);
+    if relative_image_path.is_absolute() || relative_path.trim().is_empty() {
+        return Err("本地图片路径必须是 Markdown 文档目录下的相对路径。".to_string());
+    }
+
+    let image_path = fs::canonicalize(document_parent.join(relative_image_path))
+        .map_err(|error| format!("无法读取本地图片：{error}"))?;
+    if !image_path.starts_with(&document_parent) {
+        return Err("本地图片路径超出了 Markdown 文档目录。".to_string());
+    }
+
+    let mime_type = image_mime_type(&image_path)
+        .ok_or_else(|| "只支持 PNG、JPG、GIF 和 WebP 图片。".to_string())?;
+    let bytes = fs::read(&image_path).map_err(|error| format!("读取本地图片失败：{error}"))?;
+
+    use base64::Engine;
+    Ok(MarkdownImageData {
+        mime_type: mime_type.to_string(),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
+/// 通过 Windows 原生文件选择器选择 Markdown 文件。
+#[tauri::command]
+pub fn choose_markdown_file() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        return Ok(choose_file_path(FileDialogMode::OpenMarkdown));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// 通过 Windows 原生保存对话框选择 Markdown 输出路径。
+#[tauri::command]
+pub fn choose_markdown_output() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        return Ok(choose_file_path(FileDialogMode::SaveMarkdown));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// 通过 Windows 原生保存对话框选择 PDF 输出路径。
+#[tauri::command]
+pub fn choose_pdf_output() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        return Ok(choose_file_path(FileDialogMode::SavePdf));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+#[cfg(windows)]
+enum FileDialogMode {
+    OpenMarkdown,
+    SaveMarkdown,
+    SavePdf,
+    OpenAny,
+}
+
+#[cfg(windows)]
+fn choose_file_path(mode: FileDialogMode) -> Option<String> {
+    use std::mem::size_of;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT,
+        OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    let (filter_text, title_text, default_extension_text, save) = match mode {
+        FileDialogMode::OpenMarkdown => (
+            "Markdown 文件\0*.md;*.markdown\0所有文件\0*.*\0",
+            "打开 Markdown 文件",
+            "md",
+            false,
+        ),
+        FileDialogMode::SaveMarkdown => (
+            "Markdown 文件\0*.md;*.markdown\0所有文件\0*.*\0",
+            "保存 Markdown 文件",
+            "md",
+            true,
+        ),
+        FileDialogMode::SavePdf => (
+            "PDF 文件\0*.pdf\0所有文件\0*.*\0",
+            "导出 Markdown 为 PDF",
+            "pdf",
+            true,
+        ),
+        FileDialogMode::OpenAny => (
+            "所有文件 (*.*)\0*.*\0可执行文件 (*.exe;*.bat;*.cmd)\0*.exe;*.bat;*.cmd\0",
+            "选择文件或程序",
+            "",
+            false,
+        ),
+    };
+    let filter = wide_null(filter_text);
+    let title = wide_null(title_text);
+    let default_extension = wide_null(default_extension_text);
+    let mut file_buffer = vec![0u16; 32_768];
+    let mut file_dialog = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: null_mut(),
+        hInstance: null_mut(),
+        lpstrFilter: filter.as_ptr(),
+        lpstrCustomFilter: null_mut(),
+        nMaxCustFilter: 0,
+        nFilterIndex: 1,
+        lpstrFile: file_buffer.as_mut_ptr(),
+        nMaxFile: file_buffer.len() as u32,
+        lpstrFileTitle: null_mut(),
+        nMaxFileTitle: 0,
+        lpstrInitialDir: std::ptr::null(),
+        lpstrTitle: title.as_ptr(),
+        Flags: OFN_EXPLORER
+            | OFN_PATHMUSTEXIST
+            | if save {
+                OFN_OVERWRITEPROMPT
+            } else {
+                OFN_FILEMUSTEXIST
+            },
+        nFileOffset: 0,
+        nFileExtension: 0,
+        lpstrDefExt: default_extension.as_ptr(),
+        lCustData: 0,
+        lpfnHook: None,
+        lpTemplateName: std::ptr::null(),
+        pvReserved: null_mut(),
+        dwReserved: 0,
+        FlagsEx: 0,
+    };
+
+    let succeeded = unsafe {
+        if save {
+            GetSaveFileNameW(&mut file_dialog) != 0
+        } else {
+            GetOpenFileNameW(&mut file_dialog) != 0
+        }
+    };
+
+    if !succeeded {
+        return None;
+    }
+
+    let length = file_buffer
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(file_buffer.len());
+    Some(String::from_utf16_lossy(&file_buffer[..length]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
@@ -224,5 +722,14 @@ mod tests {
             serde_json::from_str(&serialized).expect("反序列化应成功");
 
         assert_eq!(sample, deserialized);
+    }
+
+    #[test]
+    fn markdown_file_extension_accepts_markdown_files_only() {
+        assert!(is_markdown_path(Path::new("notes.md")));
+        assert!(is_markdown_path(Path::new("notes.markdown")));
+        assert!(is_markdown_path(Path::new("NOTES.MD")));
+        assert!(!is_markdown_path(Path::new("notes.txt")));
+        assert!(!is_markdown_path(Path::new("notes.md.bak")));
     }
 }

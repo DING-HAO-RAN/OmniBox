@@ -1,6 +1,6 @@
 <template>
   <!-- 桌面外壳主架构容器：高度占满视窗，禁止外部滚动 -->
-  <div class="h-screen w-screen flex flex-col overflow-hidden bg-[#0d1117] text-white">
+  <div class="app-shell h-screen w-screen flex flex-col overflow-hidden bg-[#0d1117] text-white">
     <!-- 顶部统一自定义标题栏 -->
     <HeaderBar />
 

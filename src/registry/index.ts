@@ -9,6 +9,9 @@ import type { ToolModule, ToolCategory } from '../types/module';
 import OverviewView from '../components/views/OverviewView.vue';
 import LauncherView from '../views/LauncherView.vue';
 import MemoryCleanerView from '../views/MemoryCleanerView.vue';
+import MarkdownPdfView from '../views/MarkdownPdfView.vue';
+import FileCloakerView from '../views/FileCloakerView.vue';
+import SettingsView from '../views/SettingsView.vue';
 
 /**
  * 分类元数据信息定义
@@ -142,4 +145,37 @@ registerTool({
   category: 'efficiency',
   component: LauncherView,
   order: 3,
+});
+
+// 4. Markdown 实时预览与 PDF 导出工作区
+registerTool({
+  id: 'markdown-pdf',
+  title: 'Markdown 转 PDF',
+  description: '实时预览并导出可配置版式的 PDF 文档',
+  iconName: 'FileDown',
+  category: 'dev',
+  component: MarkdownPdfView,
+  order: 4,
+});
+
+// 5. 深度隐藏文件/文件夹 (超级隐藏 + 启动器协同)
+registerTool({
+  id: 'file-cloaker',
+  title: '深度隐藏',
+  description: 'Windows 系统级超级隐藏与私密启动联动',
+  iconName: 'EyeOff',
+  category: 'efficiency',
+  component: FileCloakerView,
+  order: 5,
+});
+
+// 6. 通用配置中心
+registerTool({
+  id: 'settings',
+  title: '通用设置',
+  description: '管理员权限、自启策略、界面语言与自动优化配置',
+  iconName: 'Settings',
+  category: 'system',
+  component: SettingsView,
+  order: 99,
 });

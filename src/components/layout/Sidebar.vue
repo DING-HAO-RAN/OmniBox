@@ -107,7 +107,9 @@ import {
   HardDrive,
   Activity,
   Sparkles,
+  FileDown,
   HelpCircle,
+  EyeOff,
 } from 'lucide-vue-next';
 import {
   CATEGORIES,
@@ -135,6 +137,8 @@ const iconDictionary: Record<string, any> = {
   HardDrive,
   Activity,
   Sparkles,
+  FileDown,
+  EyeOff,
 };
 
 /**

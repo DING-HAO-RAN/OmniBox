@@ -47,33 +47,36 @@
     </div>
 
     <!-- 右侧：Windows 11 风格自定义窗口操作按钮 -->
-    <div class="no-drag flex items-center -mr-1">
+    <div class="no-drag flex items-center -mr-1 relative z-50">
       <!-- 最小化 -->
       <button
-        @click="handleMinimize"
-        class="w-10 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-sm transition-colors"
+        @click.stop="handleMinimize"
+        type="button"
+        class="w-10 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-sm transition-colors cursor-pointer"
         title="最小化"
       >
-        <Minus class="w-3.5 h-3.5" />
+        <Minus class="w-3.5 h-3.5 pointer-events-none" />
       </button>
 
       <!-- 最大化 / 还原 -->
       <button
-        @click="handleToggleMaximize"
-        class="w-10 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-sm transition-colors"
+        @click.stop="handleToggleMaximize"
+        type="button"
+        class="w-10 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-sm transition-colors cursor-pointer"
         :title="isMaximized ? '还原窗口' : '最大化'"
       >
-        <Copy v-if="isMaximized" class="w-3 h-3 rotate-180" />
-        <Square v-else class="w-3 h-3" />
+        <Copy v-if="isMaximized" class="w-3 h-3 rotate-180 pointer-events-none" />
+        <Square v-else class="w-3 h-3 pointer-events-none" />
       </button>
 
       <!-- 关闭窗口 -->
       <button
-        @click="handleClose"
-        class="w-10 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-rose-600 rounded-sm transition-colors"
+        @click.stop="handleClose"
+        type="button"
+        class="w-10 h-8 flex items-center justify-center text-gray-400 hover:text-white hover:bg-rose-600 rounded-sm transition-colors cursor-pointer"
         title="关闭应用"
       >
-        <X class="w-3.5 h-3.5" />
+        <X class="w-3.5 h-3.5 pointer-events-none" />
       </button>
     </div>
   </header>
@@ -88,7 +91,6 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Layers, Minus, Square, Copy, X } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { MemoryStatus } from '../../types/module';
 import { activeTool, setActiveTool } from '../../registry';
 
@@ -153,8 +155,7 @@ function navigateToMemoryTool() {
 async function handleMinimize() {
   if (isTauri()) {
     try {
-      const win = getCurrentWindow();
-      await win.minimize();
+      await invoke('app_minimize_window');
     } catch (err) {
       console.error('最小化失败:', err);
     }
@@ -167,9 +168,8 @@ async function handleMinimize() {
 async function handleToggleMaximize() {
   if (isTauri()) {
     try {
-      const win = getCurrentWindow();
-      await win.toggleMaximize();
-      isMaximized.value = await win.isMaximized();
+      const state = await invoke<boolean>('app_toggle_maximize_window');
+      isMaximized.value = state;
     } catch (err) {
       console.error('窗口最大化切换失败:', err);
     }
@@ -184,8 +184,7 @@ async function handleToggleMaximize() {
 async function handleClose() {
   if (isTauri()) {
     try {
-      const win = getCurrentWindow();
-      await win.close();
+      await invoke('app_close_window');
     } catch (err) {
       console.error('关闭窗口失败:', err);
     }
@@ -208,9 +207,11 @@ onMounted(() => {
 
   // 初始化窗口最大化状态检查
   if (isTauri()) {
-    getCurrentWindow().isMaximized().then((max) => {
-      isMaximized.value = max;
-    }).catch(() => {});
+    invoke<boolean>('app_is_maximized')
+      .then((max) => {
+        isMaximized.value = max;
+      })
+      .catch(() => {});
   }
 });
 

@@ -18,9 +18,26 @@
 
         <!-- 顶部操作区：手动刷新状态与自动轮询标识 -->
         <div class="flex items-center gap-3">
+          <div
+            v-if="isAdmin"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 font-medium"
+          >
+            <ShieldCheck class="w-3.5 h-3.5 text-amber-400" />
+            <span>PCL2 内核深度模式已就绪</span>
+          </div>
+          <button
+            v-else
+            @click="handleRestartAsAdmin"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-xs text-blue-300 transition-all font-medium active:scale-95"
+            title="提升至管理员权限以解锁与 PCL2 相同的系统待机缓存 (Standby List) 彻底清空能力"
+          >
+            <ShieldAlert class="w-3.5 h-3.5 text-blue-400" />
+            <span>激活 PCL2 深度内核优化</span>
+          </button>
+
           <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-gray-400">
             <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>实时监控中 (3s 轮询)</span>
+            <span>实时监控 (3s 轮询)</span>
           </div>
 
           <button
@@ -242,6 +259,7 @@ import {
   BarChart3,
   ArrowDownRight,
   ShieldCheck,
+  ShieldAlert,
   Activity,
   Sparkles,
 } from 'lucide-vue-next';
@@ -251,6 +269,8 @@ import { useToast } from '../composables/useToast';
 import MemoryGauge from '../components/memory/MemoryGauge.vue';
 
 const { toast } = useToast();
+
+const isAdmin = ref(false);
 
 // 内存指标响应式数据 (默认保底数值)
 const memoryInfo = ref<MemoryStatus>({
@@ -408,7 +428,7 @@ async function handleCleanMemory() {
     // 弹出优雅 Toast 反馈
     const freedText = formatFreed(result.freed_mb);
     toast.success(
-      '深度优化完成！',
+      result.clean_mode || '深度优化完成！',
       `成功释放 ${freedText} 物理内存，修剪了 ${result.processes_trimmed} 个活跃进程工作集。`
     );
   } catch (err) {
@@ -419,11 +439,42 @@ async function handleCleanMemory() {
   }
 }
 
+/**
+ * 检查当前是否具备管理员权限
+ */
+async function checkAdminStatus() {
+  if (isTauri()) {
+    try {
+      isAdmin.value = await invoke<boolean>('get_admin_status');
+    } catch {
+      isAdmin.value = false;
+    }
+  }
+}
+
+/**
+ * 以管理员权限重启程序以激活 PCL2 级待机缓存深度优化
+ */
+async function handleRestartAsAdmin() {
+  if (isTauri()) {
+    try {
+      toast.info('正在请求管理员授权', '请在弹出的 Windows UAC 对话框中点击“是”');
+      await invoke('request_restart_as_admin');
+    } catch (err) {
+      toast.error('提权启动失败', String(err));
+    }
+  } else {
+    isAdmin.value = !isAdmin.value;
+    toast.success('模拟提权切换', `当前模式：${isAdmin.value ? '已激活 PCL2 深度模式' : '普通用户模式'}`);
+  }
+}
+
 // ----------------------------------------------------
 // 组件生命周期挂载与安全定时轮询
 // ----------------------------------------------------
 
 onMounted(async () => {
+  checkAdminStatus();
   // 首次挂载立即拉取
   await fetchMemoryStatus(true);
 

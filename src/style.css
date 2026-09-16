@@ -138,3 +138,78 @@ textarea,
     -webkit-text-fill-color: transparent;
   }
 }
+
+/* ==========================================================================
+   Markdown 转 PDF 导出时只保留纸张内容，避免把桌面壳层打印进 PDF
+   ========================================================================== */
+html.pdf-exporting,
+html.pdf-exporting body,
+html.pdf-exporting #app-root {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  background: #ffffff !important;
+}
+
+html.pdf-exporting .app-shell {
+  display: block;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  background: #ffffff !important;
+}
+
+html.pdf-exporting .app-shell > :first-child,
+html.pdf-exporting .app-shell aside,
+html.pdf-exporting .markdown-pdf-toolbar,
+html.pdf-exporting .markdown-editor-pane,
+html.pdf-exporting .pdf-settings-panel,
+html.pdf-exporting .markdown-pdf-statusbar,
+html.pdf-exporting .markdown-panel-heading,
+html.pdf-exporting .markdown-preview-warning {
+  display: none !important;
+}
+
+html.pdf-exporting .app-shell > :last-child,
+html.pdf-exporting .app-shell main,
+html.pdf-exporting .app-shell main > div,
+html.pdf-exporting .markdown-pdf-view,
+html.pdf-exporting .markdown-pdf-content,
+html.pdf-exporting .markdown-pdf-edit-preview,
+html.pdf-exporting .markdown-preview-host,
+html.pdf-exporting .markdown-preview-scroll {
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+  background: #ffffff !important;
+}
+
+html.pdf-exporting .markdown-paper {
+  width: var(--pdf-page-width);
+  min-height: var(--pdf-page-height);
+  margin: 0;
+  box-shadow: none;
+  zoom: 1;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+html.pdf-exporting .pdf-print-header {
+  position: fixed;
+  top: var(--pdf-margin-top);
+  right: var(--pdf-margin-right);
+  left: var(--pdf-margin-left);
+  margin: 0;
+}
+
+html.pdf-exporting .pdf-print-footer {
+  position: fixed;
+  right: var(--pdf-margin-right);
+  bottom: var(--pdf-margin-bottom);
+  left: var(--pdf-margin-left);
+  margin: 0;
+}

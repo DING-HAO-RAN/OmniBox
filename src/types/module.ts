@@ -63,6 +63,52 @@ export interface CleanResult {
   before_usage_percent: number;
   /** 清理后内存占用百分比 (0.0 ~ 100.0) */
   after_usage_percent: number;
+  /** 释放的备用列表/待机缓存 (Standby Cache) 字节数 */
+  standby_freed_bytes?: number;
+  /** 清理模式描述 */
+  clean_mode?: string;
+  /** 执行时是否具备管理员权限 */
+  is_admin?: boolean;
+}
+
+/**
+ * 应用程序通用设置
+ */
+export interface AppSettings {
+  /** 是否以管理员权限自启/首选运行 */
+  run_as_admin_default: boolean;
+  /** 界面语言 ("zh-CN" | "en-US") */
+  language: string;
+  /** 是否开机自动启动 */
+  auto_start: boolean;
+  /** 开机自启时是否默认静默最小化 */
+  start_minimized: boolean;
+  /** 关闭窗口时最小化到托盘还是退出 */
+  close_to_tray: boolean;
+  /** 是否启用内存智能自动清理 */
+  auto_clean_memory: boolean;
+  /** 自动清理内存的占用率阈值 (例如 80 代表 80%) */
+  auto_clean_threshold: number;
+}
+
+/**
+ * 深度隐藏文件/文件夹条目
+ */
+export interface CloakedItem {
+  /** 唯一标识 ID */
+  id: string;
+  /** 显示名称 */
+  name: string;
+  /** 文件或文件夹完整绝对路径 */
+  path: string;
+  /** 是否为目录 */
+  is_dir: boolean;
+  /** 添加时间戳 (毫秒) */
+  added_at: number;
+  /** 当前是否处于超级隐藏状态 */
+  is_cloaked: boolean;
+  /** 备注说明 */
+  note: string;
 }
 
 /**

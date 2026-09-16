@@ -154,8 +154,46 @@ fn test_types_serialization() {
         processes_trimmed: 15,
         before_usage_percent: 65.5,
         after_usage_percent: 60.2,
+        standby_freed_bytes: 52428800,
+        clean_mode: "PCL2 深度内核优化 (待机缓存+全工作集)".to_string(),
+        is_admin: true,
     };
     let json_clean = serde_json::to_string(&clean).expect("序列化 CleanResult 应成功");
     let deserialized_clean: CleanResult = serde_json::from_str(&json_clean).expect("反序列化 CleanResult 应成功");
     assert_eq!(clean, deserialized_clean);
+
+    let settings = AppSettings::default();
+    assert_eq!(settings.language, "zh-CN");
+    assert_eq!(settings.auto_clean_threshold, 80);
+
+    let cloaked = CloakedItem {
+        id: "test-cloak".to_string(),
+        name: "测试机密文件.txt".to_string(),
+        path: "C:\\test.txt".to_string(),
+        is_dir: false,
+        added_at: 100000,
+        is_cloaked: true,
+        note: "私密备忘".to_string(),
+    };
+    let json_cloaked = serde_json::to_string(&cloaked).expect("序列化 CloakedItem 应成功");
+    let deserialized_cloaked: CloakedItem = serde_json::from_str(&json_cloaked).expect("反序列化 CloakedItem 应成功");
+    assert_eq!(cloaked, deserialized_cloaked);
+}
+
+#[test]
+fn test_cloaker_on_temp_file() {
+    use std::fs;
+    let temp_file = std::env::temp_dir().join(format!("omnibox_cloak_test_{}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::write(&temp_file, "secret content").expect("写临时测试文件应成功");
+
+    let path_str = temp_file.to_string_lossy().to_string();
+    assert!(!super::cloaker::is_path_cloaked(&path_str).unwrap(), "初始状态不应为隐身");
+
+    super::cloaker::cloak_path(&path_str).expect("隐身文件应成功");
+    assert!(super::cloaker::is_path_cloaked(&path_str).unwrap(), "施加后应为隐身状态");
+
+    super::cloaker::uncloak_path(&path_str).expect("解除隐身应成功");
+    assert!(!super::cloaker::is_path_cloaked(&path_str).unwrap(), "解除后不应为隐身");
+
+    let _ = fs::remove_file(&temp_file);
 }
