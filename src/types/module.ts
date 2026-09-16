@@ -179,6 +179,7 @@ export interface DiskInfo {
   available_bytes: number;
   used_bytes: number;
   usage_percent: number;
+  is_system_drive?: boolean;
 }
 
 /**
@@ -193,6 +194,40 @@ export interface NetworkSpeedInfo {
 }
 
 /**
+ * CPU 详细硬件与调度指标 (对标任务管理器)
+ */
+export interface CpuDetailedInfo {
+  name: string;
+  physical_cores: number;
+  logical_cores: number;
+  usage_percent: number;
+  process_count: number;
+  thread_count: number;
+  handle_count: number;
+  uptime_seconds: number;
+  uptime_formatted: string;
+}
+
+/**
+ * 内存详细硬件与虚拟内存指标 (对标任务管理器)
+ */
+export interface MemoryDetailedInfo {
+  base: MemoryStatus;
+  committed_bytes: number;
+  commit_limit_bytes: number;
+  paged_pool_bytes: number;
+  non_paged_pool_bytes: number;
+}
+
+/**
+ * GPU 详细信息
+ */
+export interface GpuDetailedInfo {
+  name: string;
+  status: string;
+}
+
+/**
  * 全局硬件性能快照 (对齐 Rust 端 `HardwarePerformance`)
  */
 export interface HardwarePerformance {
@@ -203,6 +238,9 @@ export interface HardwarePerformance {
   memory: MemoryStatus;
   disks: DiskInfo[];
   network: NetworkSpeedInfo;
+  cpu_detail?: CpuDetailedInfo;
+  memory_detail?: MemoryDetailedInfo;
+  gpu_detail?: GpuDetailedInfo;
 }
 
 /**

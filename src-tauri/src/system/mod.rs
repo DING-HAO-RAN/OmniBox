@@ -11,7 +11,10 @@ pub mod sys_tools;
 pub mod tweaks;
 pub mod types;
 
-pub use hardware::{get_hardware_performance, DiskInfo, HardwarePerformance, NetworkSpeedInfo};
+pub use hardware::{
+    get_hardware_performance, CpuDetailedInfo, DiskInfo, GpuDetailedInfo, HardwarePerformance,
+    MemoryDetailedInfo, NetworkSpeedInfo,
+};
 pub use memory::{clean_process_working_sets, get_memory_info, is_running_as_admin};
 pub use process::launch_process;
 pub use sys_tools::{get_system_tools_list, launch_tool_command, SystemToolItem};
