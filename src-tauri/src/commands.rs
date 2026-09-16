@@ -385,6 +385,48 @@ pub fn choose_any_file() -> Result<Option<String>, String> {
     }
 }
 
+// ==========================================
+// 硬件性能实时监控命令
+// ==========================================
+
+/// 获取系统硬件配置及当前实时性能快照 (CPU/GPU/内存/磁盘/网络)
+#[tauri::command]
+pub fn get_performance_snapshot() -> Result<crate::system::HardwarePerformance, String> {
+    crate::system::get_hardware_performance()
+}
+
+// ==========================================
+// Windows 原生系统工具快捷唤起命令
+// ==========================================
+
+/// 获取全套 Windows 实用系统工具列表
+#[tauri::command]
+pub fn get_system_tools() -> Result<Vec<crate::system::SystemToolItem>, String> {
+    Ok(crate::system::get_system_tools_list())
+}
+
+/// 唤起指定的原生系统工具 (如 gpedit.msc, regedit 等)
+#[tauri::command]
+pub fn launch_system_tool_cmd(command: String) -> Result<(), String> {
+    crate::system::launch_tool_command(&command)
+}
+
+// ==========================================
+// 系统特性一键优化与禁用命令
+// ==========================================
+
+/// 获取系统调优特性当前状态列表 (Windows 更新、安全中心等)
+#[tauri::command]
+pub fn get_system_tweaks() -> Result<Vec<crate::system::SystemTweakItem>, String> {
+    Ok(crate::system::get_all_tweaks())
+}
+
+/// 执行指定系统特性的快速禁用或恢复
+#[tauri::command]
+pub fn apply_system_tweak(id: String, disable: bool) -> Result<(), String> {
+    crate::system::toggle_tweak(&id, disable)
+}
+
 /// 打开 Markdown 文件并返回规范化路径与 UTF-8 文本。
 #[tauri::command]
 pub fn read_markdown_file(path: String) -> Result<MarkdownDocument, String> {

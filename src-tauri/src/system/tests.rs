@@ -197,3 +197,28 @@ fn test_cloaker_on_temp_file() {
 
     let _ = fs::remove_file(&temp_file);
 }
+
+#[test]
+fn test_hardware_performance_query() {
+    let perf = super::hardware::get_hardware_performance().expect("获取硬件性能快照应成功");
+    assert!(!perf.cpu_name.is_empty(), "CPU 型号不应为空");
+    assert!(perf.cpu_logical_cores > 0, "CPU 逻辑核心数应大于 0");
+    assert!(!perf.disks.is_empty(), "应至少检测到一个磁盘分区 (如 C:)");
+}
+
+#[test]
+fn test_system_tools_list_completeness() {
+    let tools = super::sys_tools::get_system_tools_list();
+    assert!(tools.len() >= 15, "系统工具库应包含不少于 15 种常用工具");
+    assert!(tools.iter().any(|t| t.id == "gpedit"), "应包含组策略编辑器");
+    assert!(tools.iter().any(|t| t.id == "regedit"), "应包含注册表编辑器");
+    assert!(tools.iter().any(|t| t.id == "compmgmt"), "应包含计算机管理");
+}
+
+#[test]
+fn test_system_tweaks_list() {
+    let tweaks = super::tweaks::get_all_tweaks();
+    assert!(tweaks.len() >= 5, "系统调优项目应至少包含 5 项");
+    assert!(tweaks.iter().any(|t| t.id == "windows_update"), "应包含 Windows 更新开关");
+    assert!(tweaks.iter().any(|t| t.id == "windows_defender"), "应包含 Defender 开关");
+}

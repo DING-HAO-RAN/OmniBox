@@ -41,6 +41,14 @@ pub fn run() {
             commands::remove_cloaked_record,
             commands::send_cloaked_to_launcher,
             commands::choose_any_file,
+            // 硬件性能监控
+            commands::get_performance_snapshot,
+            // 原生系统工具箱
+            commands::get_system_tools,
+            commands::launch_system_tool_cmd,
+            // 系统特性一键优化禁用
+            commands::get_system_tweaks,
+            commands::apply_system_tweak,
         ])
         .setup(|_app| {
             // 初始化阶段逻辑钩子，后续任务可在此注册插件或系统托盘

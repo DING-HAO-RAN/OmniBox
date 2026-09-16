@@ -12,6 +12,9 @@ import MemoryCleanerView from '../views/MemoryCleanerView.vue';
 import MarkdownPdfView from '../views/MarkdownPdfView.vue';
 import FileCloakerView from '../views/FileCloakerView.vue';
 import SettingsView from '../views/SettingsView.vue';
+import PerformanceMonitorView from '../views/PerformanceMonitorView.vue';
+import SystemToolsView from '../views/SystemToolsView.vue';
+import SystemTweaksView from '../views/SystemTweaksView.vue';
 
 /**
  * 分类元数据信息定义
@@ -114,7 +117,18 @@ export const toolRegistry = {
 // 初始化系统默认内建模块
 // ==========================================
 
-// 1. 概览中心控制台 (欢迎面板)
+// 1. 硬件设备与性能实时监控面板
+registerTool({
+  id: 'performance',
+  title: '性能监控',
+  description: 'CPU/GPU/内存/存储/网络实时状态与动态波形折线图',
+  iconName: 'Activity',
+  category: 'system',
+  component: PerformanceMonitorView,
+  order: 1,
+});
+
+// 2. 概览中心控制台 (欢迎面板)
 registerTool({
   id: 'overview',
   title: '概览中心',
@@ -122,21 +136,43 @@ registerTool({
   iconName: 'LayoutDashboard',
   category: 'system',
   component: OverviewView,
-  order: 1,
-});
-
-// 2. 内存优化器视图 (Task 6 接入)
-registerTool({
-  id: 'memory',
-  title: '内存优化',
-  description: 'Windows 进程工作集深度释放与监控',
-  iconName: 'Cpu',
-  category: 'system',
-  component: MemoryCleanerView,
   order: 2,
 });
 
-// 3. 一键启动器视图 (Task 5 已正式接入)
+// 3. 内存优化器视图 (Task 6 接入)
+registerTool({
+  id: 'memory',
+  title: '内存优化',
+  description: 'Windows 进程工作集与待机缓存深度释放',
+  iconName: 'Cpu',
+  category: 'system',
+  component: MemoryCleanerView,
+  order: 3,
+});
+
+// 4. Windows 原生系统工具快捷开启面板
+registerTool({
+  id: 'system-tools',
+  title: '系统工具',
+  description: '组策略、注册表、计算机管理等 20+ 原生专业维护工具',
+  iconName: 'Wrench',
+  category: 'system',
+  component: SystemToolsView,
+  order: 4,
+});
+
+// 5. Windows 核心特性快速禁用与调优面板
+registerTool({
+  id: 'system-tweaks',
+  title: '系统特性调优',
+  description: '一键禁用自动更新、安全中心实时监控并释放 C 盘空间',
+  iconName: 'Sliders',
+  category: 'system',
+  component: SystemTweaksView,
+  order: 5,
+});
+
+// 6. 一键启动器视图 (Task 5 已正式接入)
 registerTool({
   id: 'launcher',
   title: '应用启动器',
@@ -144,21 +180,10 @@ registerTool({
   iconName: 'Rocket',
   category: 'efficiency',
   component: LauncherView,
-  order: 3,
+  order: 6,
 });
 
-// 4. Markdown 实时预览与 PDF 导出工作区
-registerTool({
-  id: 'markdown-pdf',
-  title: 'Markdown 转 PDF',
-  description: '实时预览并导出可配置版式的 PDF 文档',
-  iconName: 'FileDown',
-  category: 'dev',
-  component: MarkdownPdfView,
-  order: 4,
-});
-
-// 5. 深度隐藏文件/文件夹 (超级隐藏 + 启动器协同)
+// 7. 深度隐藏文件/文件夹 (超级隐藏 + 启动器协同)
 registerTool({
   id: 'file-cloaker',
   title: '深度隐藏',
@@ -166,10 +191,21 @@ registerTool({
   iconName: 'EyeOff',
   category: 'efficiency',
   component: FileCloakerView,
-  order: 5,
+  order: 7,
 });
 
-// 6. 通用配置中心
+// 8. Markdown 实时预览与 PDF 导出工作区
+registerTool({
+  id: 'markdown-pdf',
+  title: 'Markdown 转 PDF',
+  description: '实时预览并导出可配置版式的 PDF 文档',
+  iconName: 'FileDown',
+  category: 'dev',
+  component: MarkdownPdfView,
+  order: 8,
+});
+
+// 9. 通用配置中心 (单独固定在左侧栏最底部)
 registerTool({
   id: 'settings',
   title: '通用设置',

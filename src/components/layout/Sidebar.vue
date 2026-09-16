@@ -34,10 +34,10 @@
             <span>{{ cat.title }}</span>
           </div>
 
-          <!-- 该分类下的工具项目 -->
+          <!-- 该分类下的工具项目 (过滤掉设置，设置已单独置底) -->
           <div class="space-y-0.5">
             <button
-              v-for="tool in getToolsByCategory(cat.id)"
+              v-for="tool in getToolsByCategory(cat.id).filter(t => t.id !== 'settings')"
               :key="tool.id"
               @click="setActiveTool(tool.id)"
               class="group relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 text-left border"
@@ -74,9 +74,40 @@
       </nav>
     </div>
 
-    <!-- 下半部：系统核心运行状态与版本信息 -->
-    <div class="p-3 border-t border-white/5 bg-white/[0.01]">
-      <div class="p-2.5 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between">
+    <!-- 下半部：独立常驻底部的通用设置与核心运行状态 -->
+    <div class="p-2.5 border-t border-white/5 bg-white/[0.01] space-y-2">
+      <!-- 独立设置按钮 -->
+      <button
+        @click="setActiveTool('settings')"
+        type="button"
+        class="group relative w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 text-left border"
+        :class="[
+          activeToolId === 'settings'
+            ? 'bg-white/[0.08] text-white font-semibold shadow-sm border-white/10'
+            : 'text-gray-400 hover:text-gray-200 hover:bg-white/[0.04] border-transparent'
+        ]"
+        title="通用配置中心 (开机自启、管理员提权、语言偏好与策略)"
+      >
+        <span
+          v-if="activeToolId === 'settings'"
+          class="absolute left-1 top-1/2 -translate-y-1/2 h-4 w-1 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]"
+        ></span>
+
+        <div
+          class="w-4 h-4 flex items-center justify-center transition-colors"
+          :class="[
+            activeToolId === 'settings'
+              ? 'text-blue-400'
+              : 'text-gray-400 group-hover:text-gray-200'
+          ]"
+        >
+          <Settings class="w-4 h-4" />
+        </div>
+
+        <span class="truncate flex-1">通用设置</span>
+      </button>
+
+      <div class="p-2 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <span class="relative flex h-2 w-2">
             <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -110,6 +141,12 @@ import {
   FileDown,
   HelpCircle,
   EyeOff,
+  LineChart,
+  Sliders,
+  ShieldAlert,
+  Gauge,
+  FolderLock,
+  Terminal,
 } from 'lucide-vue-next';
 import {
   CATEGORIES,
@@ -123,7 +160,7 @@ const activeToolId = computed(() => toolRegistry.activeToolId);
 
 // 过滤仅展示有已注册工具的分类
 const activeCategories = computed(() => {
-  return CATEGORIES.filter((cat) => getToolsByCategory(cat.id).length > 0);
+  return CATEGORIES.filter((cat) => getToolsByCategory(cat.id).filter(t => t.id !== 'settings').length > 0);
 });
 
 // 图标快速映射字典
@@ -139,6 +176,12 @@ const iconDictionary: Record<string, any> = {
   Sparkles,
   FileDown,
   EyeOff,
+  LineChart,
+  Sliders,
+  ShieldAlert,
+  Gauge,
+  FolderLock,
+  Terminal,
 };
 
 /**

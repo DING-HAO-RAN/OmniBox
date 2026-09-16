@@ -167,3 +167,64 @@ export interface ToastMessage {
   /** 自动消失停留毫秒数 (默认 3000ms) */
   duration?: number;
 }
+
+/**
+ * 磁盘分区信息 (对齐 Rust 端 `DiskInfo`)
+ */
+export interface DiskInfo {
+  letter: string;
+  label: string;
+  file_system: string;
+  total_bytes: number;
+  available_bytes: number;
+  used_bytes: number;
+  usage_percent: number;
+}
+
+/**
+ * 网络速率快照 (对齐 Rust 端 `NetworkSpeedInfo`)
+ */
+export interface NetworkSpeedInfo {
+  adapter_name: string;
+  rx_speed_bps: number;
+  tx_speed_bps: number;
+  total_rx_bytes: number;
+  total_tx_bytes: number;
+}
+
+/**
+ * 全局硬件性能快照 (对齐 Rust 端 `HardwarePerformance`)
+ */
+export interface HardwarePerformance {
+  cpu_name: string;
+  cpu_logical_cores: number;
+  cpu_usage_percent: number;
+  gpu_name: string;
+  memory: MemoryStatus;
+  disks: DiskInfo[];
+  network: NetworkSpeedInfo;
+}
+
+/**
+ * 系统内置工具 (对齐 Rust 端 `SystemToolItem`)
+ */
+export interface SystemToolItem {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  command: string;
+  icon_name: string;
+}
+
+/**
+ * 系统调优选项 (对齐 Rust 端 `SystemTweakItem`)
+ */
+export interface SystemTweakItem {
+  id: string;
+  title: string;
+  description: string;
+  impact: string;
+  is_disabled: boolean;
+  requires_admin: boolean;
+}
