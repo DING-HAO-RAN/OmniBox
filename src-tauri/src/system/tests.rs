@@ -222,3 +222,25 @@ fn test_system_tweaks_list() {
     assert!(tweaks.iter().any(|t| t.id == "windows_update"), "应包含 Windows 更新开关");
     assert!(tweaks.iter().any(|t| t.id == "windows_defender"), "应包含 Defender 开关");
 }
+
+#[test]
+fn test_collect_full_system_report() {
+    let report = super::info::collect_full_system_report();
+    assert!(report.timestamp > 0);
+    assert!(!report.computer.hostname.value.as_deref().unwrap_or("").is_empty());
+    assert!(!report.os.name.value.as_deref().unwrap_or("").is_empty());
+    assert!(!report.cpu_static.name.value.as_deref().unwrap_or("").is_empty());
+    assert!(!report.gpus.is_empty(), "应至少检测到一个 GPU 设备");
+    assert!(!report.storage.physical_disks.is_empty(), "应至少检测到一个物理驱动器");
+    assert!(!report.storage.volumes.is_empty(), "应至少检测到一个逻辑卷");
+    assert!(!report.network.adapters.is_empty(), "应至少检测到一个网络适配器");
+}
+
+#[test]
+fn test_export_and_sanitize_report() {
+    let json_raw = super::info::export_system_report_json(false).expect("导出原始报告应成功");
+    assert!(!json_raw.is_empty());
+
+    let json_sanitized = super::info::export_system_report_json(true).expect("导出脱敏报告应成功");
+    assert!(!json_sanitized.is_empty());
+}

@@ -43,6 +43,8 @@ pub fn run() {
             commands::choose_any_file,
             // 硬件性能监控
             commands::get_performance_snapshot,
+            commands::get_system_full_report,
+            commands::export_system_report,
             // 原生系统工具箱
             commands::get_system_tools,
             commands::launch_system_tool_cmd,

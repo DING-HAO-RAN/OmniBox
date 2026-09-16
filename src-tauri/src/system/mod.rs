@@ -4,6 +4,7 @@
 
 pub mod cloaker;
 pub mod hardware;
+pub mod info;
 pub mod memory;
 pub mod process;
 pub mod settings;
@@ -14,6 +15,9 @@ pub mod types;
 pub use hardware::{
     get_hardware_performance, CpuDetailedInfo, DiskInfo, GpuDetailedInfo, HardwarePerformance,
     MemoryDetailedInfo, NetworkSpeedInfo,
+};
+pub use info::{
+    collect_full_system_report, export_system_report_json, SystemFullReport,
 };
 pub use memory::{clean_process_working_sets, get_memory_info, is_running_as_admin};
 pub use process::launch_process;

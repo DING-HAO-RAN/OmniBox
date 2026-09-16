@@ -244,6 +244,404 @@ export interface HardwarePerformance {
 }
 
 /**
+ * 统一度量指标状态与数据源
+ */
+export type MetricQuality =
+  | 'Good'
+  | 'Estimated'
+  | 'Stale'
+  | 'Unsupported'
+  | 'Unavailable'
+  | 'PermissionDenied'
+  | 'DriverMissing'
+  | 'ApiUnavailable'
+  | 'ReadError'
+  | 'Invalid'
+  | 'Unknown';
+
+export interface MetricValue<T> {
+  value: T | null;
+  unit: string;
+  quality: MetricQuality;
+  source: string;
+  timestamp: number;
+  error?: string | null;
+}
+
+export interface ComputerInfo {
+  hostname: MetricValue<string>;
+  dns_hostname: MetricValue<string>;
+  manufacturer: MetricValue<string>;
+  model: MetricValue<string>;
+  system_family: MetricValue<string>;
+  serial_number: MetricValue<string>;
+  uuid: MetricValue<string>;
+  domain: MetricValue<string>;
+  workgroup: MetricValue<string>;
+  system_type: MetricValue<string>;
+  current_user: MetricValue<string>;
+  uptime_seconds: MetricValue<number>;
+  uptime_formatted: MetricValue<string>;
+}
+
+export interface MotherboardInfo {
+  manufacturer: MetricValue<string>;
+  product: MetricValue<string>;
+  version: MetricValue<string>;
+  serial_number: MetricValue<string>;
+  chipset: MetricValue<string>;
+}
+
+export interface BiosInfo {
+  vendor: MetricValue<string>;
+  version: MetricValue<string>;
+  release_date: MetricValue<string>;
+  smbios_version: MetricValue<string>;
+  firmware_mode: MetricValue<string>;
+}
+
+export interface WindowsOsInfo {
+  name: MetricValue<string>;
+  edition: MetricValue<string>;
+  display_version: MetricValue<string>;
+  build_number: MetricValue<string>;
+  ubr: MetricValue<number>;
+  architecture: MetricValue<string>;
+  install_date: MetricValue<string>;
+  windows_directory: MetricValue<string>;
+  system_directory: MetricValue<string>;
+  system_drive: MetricValue<string>;
+  locale: MetricValue<string>;
+  timezone: MetricValue<string>;
+}
+
+export interface CpuStaticInfo {
+  name: MetricValue<string>;
+  vendor: MetricValue<string>;
+  brand: MetricValue<string>;
+  family: MetricValue<number>;
+  model: MetricValue<number>;
+  stepping: MetricValue<number>;
+  physical_cores: MetricValue<number>;
+  logical_processors: MetricValue<number>;
+  l1_data_cache_kb: MetricValue<number>;
+  l1_inst_cache_kb: MetricValue<number>;
+  l2_cache_kb: MetricValue<number>;
+  l3_cache_kb: MetricValue<number>;
+  features: string[];
+  virtualization: MetricValue<string>;
+}
+
+export interface CpuRuntimeInfo {
+  total_usage_percent: MetricValue<number>;
+  user_usage_percent: MetricValue<number>;
+  kernel_usage_percent: MetricValue<number>;
+  idle_percent: MetricValue<number>;
+  base_frequency_mhz: MetricValue<number>;
+  current_frequency_mhz: MetricValue<number>;
+  package_temperature_c: MetricValue<number>;
+  package_power_watts: MetricValue<number>;
+}
+
+export interface GpuDevice {
+  id: string;
+  name: MetricValue<string>;
+  vendor: MetricValue<string>;
+  vendor_id: MetricValue<number>;
+  device_id: MetricValue<number>;
+  dedicated_vram_bytes: MetricValue<number>;
+  shared_vram_bytes: MetricValue<number>;
+  driver_version: MetricValue<string>;
+  utilization_percent: MetricValue<number>;
+  memory_used_bytes: MetricValue<number>;
+  temperature_c: MetricValue<number>;
+  power_watts: MetricValue<number>;
+  fan_speed_percent: MetricValue<number>;
+  is_primary: boolean;
+}
+
+export interface DimmModule {
+  slot: string;
+  capacity_bytes: number;
+  speed_mhz: number;
+  memory_type: string;
+  manufacturer: string;
+  part_number: string;
+  serial_number: string;
+  configured_voltage: number;
+}
+
+export interface SystemMemoryInfo {
+  total_physical_bytes: MetricValue<number>;
+  available_physical_bytes: MetricValue<number>;
+  used_physical_bytes: MetricValue<number>;
+  usage_percent: MetricValue<number>;
+  total_page_file_bytes: MetricValue<number>;
+  available_page_file_bytes: MetricValue<number>;
+  total_virtual_bytes: MetricValue<number>;
+  available_virtual_bytes: MetricValue<number>;
+  committed_bytes: MetricValue<number>;
+  commit_limit_bytes: MetricValue<number>;
+  paged_pool_bytes: MetricValue<number>;
+  non_paged_pool_bytes: MetricValue<number>;
+  hardware_reserved_bytes: MetricValue<number>;
+  dimms: DimmModule[];
+}
+
+export interface NvmeHealthInfo {
+  temperature_c: MetricValue<number>;
+  percentage_used: MetricValue<number>;
+  available_spare_percent: MetricValue<number>;
+  spare_threshold_percent: MetricValue<number>;
+  data_units_read_tb: MetricValue<number>;
+  data_units_written_tb: MetricValue<number>;
+  power_on_hours: MetricValue<number>;
+  power_cycles: MetricValue<number>;
+  unsafe_shutdowns: MetricValue<number>;
+  media_errors: MetricValue<number>;
+  critical_warning: MetricValue<number>;
+}
+
+export interface PhysicalDiskInfo {
+  id: string;
+  index: number;
+  vendor: MetricValue<string>;
+  model: MetricValue<string>;
+  serial_number: MetricValue<string>;
+  firmware_revision: MetricValue<string>;
+  bus_type: MetricValue<string>;
+  media_type: MetricValue<string>;
+  capacity_bytes: MetricValue<number>;
+  sector_size_bytes: MetricValue<number>;
+  is_nvme: boolean;
+  smart_health?: NvmeHealthInfo | null;
+}
+
+export interface VolumeInfo {
+  drive_letter: string;
+  label: string;
+  file_system: string;
+  total_bytes: number;
+  available_bytes: number;
+  used_bytes: number;
+  usage_percent: number;
+  is_read_only: boolean;
+  bitlocker_status: MetricValue<string>;
+}
+
+export interface StorageSnapshot {
+  physical_disks: PhysicalDiskInfo[];
+  volumes: VolumeInfo[];
+}
+
+export interface NetworkAdapterInfo {
+  index: number;
+  name: string;
+  alias: string;
+  description: string;
+  mac_address: string;
+  is_physical: boolean;
+  oper_status: string;
+  link_speed_bps: number;
+  mtu: number;
+  ipv4_addresses: string[];
+  ipv6_addresses: string[];
+  gateway: string;
+  dns_servers: string[];
+  dhcp_enabled: boolean;
+  rx_speed_bps: number;
+  tx_speed_bps: number;
+  total_rx_bytes: number;
+  total_tx_bytes: number;
+}
+
+export interface WiFiConnectionInfo {
+  is_connected: boolean;
+  ssid: MetricValue<string>;
+  bssid: MetricValue<string>;
+  signal_quality_percent: MetricValue<number>;
+  rssi_dbm: MetricValue<number>;
+  channel: MetricValue<number>;
+  radio_frequency_ghz: MetricValue<number>;
+  security_cipher: MetricValue<string>;
+}
+
+export interface NetworkConnectionsSummary {
+  tcp_established_count: number;
+  tcp_listening_count: number;
+  tcp_time_wait_count: number;
+  tcp_total_connections: number;
+  udp_endpoints_count: number;
+}
+
+export interface NetworkSnapshot {
+  adapters: NetworkAdapterInfo[];
+  wifi_info: WiFiConnectionInfo;
+  connections_summary: NetworkConnectionsSummary;
+}
+
+export interface DisplayDevice {
+  id: string;
+  name: string;
+  friendly_name: string;
+  is_primary: boolean;
+  width: number;
+  height: number;
+  refresh_rate_hz: number;
+  bits_per_pixel: number;
+  orientation: string;
+  position_x: number;
+  position_y: number;
+  hdr_supported: boolean;
+}
+
+export interface AudioDeviceInfo {
+  id: string;
+  name: string;
+  is_output: boolean;
+  is_default: boolean;
+  volume_percent: number;
+  is_muted: boolean;
+  state: string;
+}
+
+export interface MediaDevicesSnapshot {
+  displays: DisplayDevice[];
+  audio_devices: AudioDeviceInfo[];
+}
+
+export interface PnpDeviceEntry {
+  device_name: string;
+  friendly_name: string;
+  manufacturer: string;
+  device_class: string;
+  hardware_id: string;
+  vendor_id?: string | null;
+  product_id?: string | null;
+  bus_type: string;
+}
+
+export interface DevicesSnapshot {
+  usb_devices: PnpDeviceEntry[];
+  pci_devices: PnpDeviceEntry[];
+  other_pnp_devices: PnpDeviceEntry[];
+}
+
+export interface BatteryPowerSnapshot {
+  has_battery: boolean;
+  ac_connected: MetricValue<boolean>;
+  battery_percent: MetricValue<number>;
+  charging_status: MetricValue<string>;
+  estimated_runtime_minutes: MetricValue<number>;
+  power_scheme: MetricValue<string>;
+}
+
+export interface ProcessSummaryItem {
+  pid: number;
+  ppid: number;
+  name: string;
+  threads: number;
+  memory_working_set_bytes: number;
+}
+
+export interface ProcessSnapshot {
+  total_processes: number;
+  total_threads: number;
+  top_memory_processes: ProcessSummaryItem[];
+}
+
+export interface StartupEntry {
+  name: string;
+  command: string;
+  source: string;
+  enabled: boolean;
+}
+
+export interface InstalledAppEntry {
+  name: string;
+  version: string;
+  publisher: string;
+  install_date: string;
+}
+
+export interface SecurityStatusInfo {
+  secure_boot_enabled: MetricValue<boolean>;
+  tpm_present: MetricValue<boolean>;
+  tpm_version: MetricValue<string>;
+  defender_enabled: MetricValue<boolean>;
+  defender_realtime_protection: MetricValue<boolean>;
+  firewall_domain_enabled: MetricValue<boolean>;
+  firewall_private_enabled: MetricValue<boolean>;
+  firewall_public_enabled: MetricValue<boolean>;
+}
+
+export interface ServiceSummaryItem {
+  name: string;
+  display_name: string;
+  status: string;
+}
+
+export interface WindowsEnvSnapshot {
+  startup_items: StartupEntry[];
+  installed_apps_sample: InstalledAppEntry[];
+  security_status: SecurityStatusInfo;
+  active_services_sample: ServiceSummaryItem[];
+}
+
+export interface DevToolEntry {
+  name: string;
+  installed: boolean;
+  version: string;
+  path?: string | null;
+}
+
+export interface DevEnvironmentSnapshot {
+  tools: DevToolEntry[];
+}
+
+export interface CrashDumpEntry {
+  file_name: string;
+  file_size_bytes: number;
+  created_at: string;
+}
+
+export interface HardwareEventSummary {
+  provider: string;
+  event_id: number;
+  severity: string;
+  description: string;
+}
+
+export interface DiagnosticsSnapshot {
+  minidump_count: number;
+  recent_crash_dumps: CrashDumpEntry[];
+  unexpected_shutdowns_count: number;
+  whea_hardware_events: HardwareEventSummary[];
+  overall_health_assessment: string;
+}
+
+export interface SystemFullReport {
+  computer: ComputerInfo;
+  motherboard: MotherboardInfo;
+  bios: BiosInfo;
+  os: WindowsOsInfo;
+  cpu_static: CpuStaticInfo;
+  cpu_runtime: CpuRuntimeInfo;
+  gpus: GpuDevice[];
+  memory: SystemMemoryInfo;
+  storage: StorageSnapshot;
+  network: NetworkSnapshot;
+  media: MediaDevicesSnapshot;
+  devices: DevicesSnapshot;
+  battery_power: BatteryPowerSnapshot;
+  processes: ProcessSnapshot;
+  windows_env: WindowsEnvSnapshot;
+  dev_env: DevEnvironmentSnapshot;
+  diagnostics: DiagnosticsSnapshot;
+  timestamp: number;
+}
+
+/**
  * 系统内置工具 (对齐 Rust 端 `SystemToolItem`)
  */
 export interface SystemToolItem {

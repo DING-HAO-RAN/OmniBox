@@ -395,6 +395,18 @@ pub fn get_performance_snapshot() -> Result<crate::system::HardwarePerformance, 
     crate::system::get_hardware_performance()
 }
 
+/// 采集全量多维度系统与硬件诊断报告 (覆盖整机/主板/CPU/多显卡/物理DIMM/NVMe/网络/显示音频外设/进程/安全)
+#[tauri::command]
+pub fn get_system_full_report() -> Result<crate::system::info::SystemFullReport, String> {
+    Ok(crate::system::info::collect_full_system_report())
+}
+
+/// 导出完整格式化 JSON 系统诊断报告 (支持按需脱敏保护隐私)
+#[tauri::command]
+pub fn export_system_report(sanitize: bool) -> Result<String, String> {
+    crate::system::info::export_system_report_json(sanitize)
+}
+
 // ==========================================
 // Windows 原生系统工具快捷唤起命令
 // ==========================================

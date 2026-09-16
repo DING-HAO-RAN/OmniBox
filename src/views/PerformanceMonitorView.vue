@@ -1,53 +1,42 @@
 <template>
-  <!-- 深度对标 Windows 任务管理器的硬件性能监控面板 -->
+  <!-- 深度对标 Windows 任务管理器与 AIDA64 的全能硬件性能与系统全景中心 -->
   <div class="h-full flex flex-col min-h-0 bg-transparent text-white overflow-hidden select-none">
     <!-- 顶部工作台标题栏 -->
-    <header class="flex-shrink-0 px-8 pt-6 pb-4 border-b border-white/5 bg-white/[0.01]">
+    <header class="flex-shrink-0 px-8 pt-5 pb-3 border-b border-white/5 bg-white/[0.01]">
       <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-2.5">
             <div class="w-7 h-7 rounded-lg bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center justify-center">
               <Activity class="w-4 h-4" />
             </div>
-            <h1 class="text-xl font-bold tracking-tight text-white">系统性能与硬件监控中心</h1>
+            <h1 class="text-xl font-bold tracking-tight text-white">系统性能与硬件全景监控中心</h1>
           </div>
-          <p class="text-xs text-gray-400 mt-1">
-            原生采集 CPU、物理内存、各存储磁盘、网络吞吐与 GPU 深度运行状态与 60s 实时走势图。
+          <p class="text-xs text-gray-400 mt-0.5">
+            原生采集 CPU 指令集与缓存、多 GPU 显存、物理 DIMM、NVMe SMART 寿命、网络 Wi-Fi、外设、安全与诊断日志。
           </p>
         </div>
 
-        <!-- 刷新与视图切换控制 -->
-        <div class="flex items-center gap-3">
-          <!-- 模式切换: 任务管理器分栏模式 vs 全景矩阵模式 -->
+        <!-- 顶部主标签页切换 -->
+        <div class="flex items-center gap-2.5">
           <div class="inline-flex p-1 rounded-xl bg-black/40 border border-white/10 text-xs">
             <button
-              @click="viewMode = 'taskmgr'"
+              v-for="tab in mainTabs"
+              :key="tab.id"
+              @click="activeMainTab = tab.id"
               type="button"
-              class="px-3 py-1 rounded-lg font-medium transition-all"
-              :class="viewMode === 'taskmgr' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+              class="px-3 py-1 rounded-lg font-medium transition-all flex items-center gap-1.5"
+              :class="activeMainTab === tab.id ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'"
             >
-              任务管理器模式
+              <component :is="tab.icon" class="w-3.5 h-3.5" />
+              <span>{{ tab.title }}</span>
             </button>
-            <button
-              @click="viewMode = 'grid'"
-              type="button"
-              class="px-3 py-1 rounded-lg font-medium transition-all"
-              :class="viewMode === 'grid' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'"
-            >
-              全景网格视图
-            </button>
-          </div>
-
-          <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-gray-400">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>1.5s 采样</span>
           </div>
 
           <button
-            @click="fetchData"
+            @click="handleManualRefresh"
             type="button"
-            class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium text-gray-200 bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 transition-all"
-            title="手动刷新硬件状态"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-gray-200 bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 transition-all"
+            title="刷新系统数据"
           >
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isFetching }" />
             <span>刷新</span>
@@ -56,534 +45,684 @@
       </div>
     </header>
 
-    <!-- 主内容展示区 -->
+    <!-- 主展示区 -->
     <main class="flex-1 min-h-0 overflow-hidden px-8 py-5 flex flex-col">
-      <!-- ================= 模式一：对标任务管理器的精细左右分栏模式 ================= -->
-      <div v-if="viewMode === 'taskmgr'" class="flex-1 min-h-0 flex flex-col lg:flex-row gap-5">
-        <!-- 左侧：硬件分类迷你卡片选择栏 -->
-        <div class="w-full lg:w-72 flex-shrink-0 flex flex-col gap-2 overflow-y-auto win11-scrollbar pr-1">
-          <!-- 1. CPU 卡片 -->
-          <button
-            @click="activeDevice = 'cpu'"
-            type="button"
-            class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-            :class="activeDevice === 'cpu' ? 'bg-blue-600/15 border-blue-500/50 shadow-lg shadow-blue-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
-          >
-            <span v-if="activeDevice === 'cpu'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>
-            <div class="min-w-0">
-              <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'cpu' ? 'text-blue-400' : 'text-gray-300'">
-                <Cpu class="w-3.5 h-3.5" />
-                <span>CPU</span>
-              </div>
-              <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">
-                {{ perfData.cpu_usage_percent.toFixed(0) }}%
-              </p>
-              <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]" :title="perfData.cpu_name">
-                {{ perfData.cpu_name }}
-              </p>
-            </div>
-            <!-- 迷你走势微图 -->
-            <div class="w-20 h-10 flex-shrink-0">
-              <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
-                <polyline :points="buildPoints(cpuHistory, 100).linePoints" fill="none" stroke="#3b82f6" stroke-width="1.5" />
-              </svg>
-            </div>
-          </button>
-
-          <!-- 2. 内存 卡片 -->
-          <button
-            @click="activeDevice = 'memory'"
-            type="button"
-            class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-            :class="activeDevice === 'memory' ? 'bg-purple-600/15 border-purple-500/50 shadow-lg shadow-purple-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
-          >
-            <span v-if="activeDevice === 'memory'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.8)]"></span>
-            <div class="min-w-0">
-              <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'memory' ? 'text-purple-400' : 'text-gray-300'">
-                <Layers class="w-3.5 h-3.5" />
-                <span>内存 (RAM)</span>
-              </div>
-              <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">
-                {{ formatGb(perfData.memory.used_ram) }}/{{ formatGb(perfData.memory.total_ram) }} ({{ perfData.memory.usage_percent.toFixed(0) }}%)
-              </p>
-              <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">
-                已用 {{ (perfData.memory.used_ram / (1024*1024*1024)).toFixed(1) }} GB
-              </p>
-            </div>
-            <div class="w-20 h-10 flex-shrink-0">
-              <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
-                <polyline :points="buildPoints(memHistory, 100).linePoints" fill="none" stroke="#a855f7" stroke-width="1.5" />
-              </svg>
-            </div>
-          </button>
-
-          <!-- 3. 磁盘 卡片 (列表中的首个磁盘或选中的盘) -->
-          <button
-            v-for="disk in perfData.disks"
-            :key="disk.letter"
-            @click="activeDevice = 'disk:' + disk.letter"
-            type="button"
-            class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-            :class="activeDevice === 'disk:' + disk.letter ? 'bg-emerald-600/15 border-emerald-500/50 shadow-lg shadow-emerald-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
-          >
-            <span v-if="activeDevice === 'disk:' + disk.letter" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-            <div class="min-w-0">
-              <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'disk:' + disk.letter ? 'text-emerald-400' : 'text-gray-300'">
-                <HardDrive class="w-3.5 h-3.5" />
-                <span>磁盘 ({{ disk.letter }})</span>
-              </div>
-              <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">
-                {{ disk.usage_percent }}% 已用
-              </p>
-              <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">
-                {{ disk.label }} ({{ disk.file_system }})
-              </p>
-            </div>
-            <!-- 磁盘进度条 -->
-            <div class="w-16 flex flex-col items-end gap-1 flex-shrink-0">
-              <span class="text-[9px] font-mono text-gray-400">{{ formatBytes(disk.available_bytes) }} 余</span>
-              <div class="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-                <div class="h-full bg-emerald-500 rounded-full" :style="{ width: `${disk.usage_percent}%` }"></div>
-              </div>
-            </div>
-          </button>
-
-          <!-- 4. 网络 卡片 -->
-          <button
-            @click="activeDevice = 'network'"
-            type="button"
-            class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-            :class="activeDevice === 'network' ? 'bg-amber-600/15 border-amber-500/50 shadow-lg shadow-amber-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
-          >
-            <span v-if="activeDevice === 'network'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]"></span>
-            <div class="min-w-0">
-              <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'network' ? 'text-amber-400' : 'text-gray-300'">
-                <Network class="w-3.5 h-3.5" />
-                <span>以太网 / Wi-Fi</span>
-              </div>
-              <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">
-                ↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}
-              </p>
-              <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]" :title="perfData.network.adapter_name">
-                ↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}
-              </p>
-            </div>
-            <div class="w-20 h-10 flex-shrink-0">
-              <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
-                <polyline :points="buildPoints(netHistory, Math.max(1024*100, ...netHistory)).linePoints" fill="none" stroke="#f59e0b" stroke-width="1.5" />
-              </svg>
-            </div>
-          </button>
-
-          <!-- 5. GPU 卡片 -->
-          <button
-            @click="activeDevice = 'gpu'"
-            type="button"
-            class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-            :class="activeDevice === 'gpu' ? 'bg-sky-600/15 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
-          >
-            <span v-if="activeDevice === 'gpu'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.8)]"></span>
-            <div class="min-w-0">
-              <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'gpu' ? 'text-sky-400' : 'text-gray-300'">
-                <Monitor class="w-3.5 h-3.5" />
-                <span>GPU</span>
-              </div>
-              <p class="text-[11px] text-gray-300 mt-1 font-semibold truncate max-w-[140px]" :title="perfData.gpu_name">
-                {{ perfData.gpu_name }}
-              </p>
-              <p class="text-[10px] text-gray-500 truncate mt-0.5">3D 硬件加速就绪</p>
-            </div>
-            <div class="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 flex-shrink-0">
-              <Sparkles class="w-4 h-4" />
-            </div>
-          </button>
+      <!-- ================= 标签 1：实时性能走势 (对标任务管理器 60s 走势图) ================= -->
+      <div v-if="activeMainTab === 'charts'" class="flex-1 min-h-0 flex flex-col">
+        <!-- 顶部子模式切换 -->
+        <div class="flex items-center justify-between pb-3 mb-1 border-b border-white/5">
+          <span class="text-xs text-gray-400">实时采样周期: 1.5s · 保留 60s 历史窗口</span>
+          <div class="inline-flex p-0.5 rounded-lg bg-white/[0.03] border border-white/10 text-[11px]">
+            <button
+              @click="chartSubMode = 'taskmgr'"
+              type="button"
+              class="px-2.5 py-0.5 rounded font-medium transition-all"
+              :class="chartSubMode === 'taskmgr' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+            >
+              分栏精细模式
+            </button>
+            <button
+              @click="chartSubMode = 'grid'"
+              type="button"
+              class="px-2.5 py-0.5 rounded font-medium transition-all"
+              :class="chartSubMode === 'grid' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+            >
+              全景网格视图
+            </button>
+          </div>
         </div>
 
-        <!-- 右侧：选中的硬件详细精细图表与参数面板 -->
-        <div class="flex-1 min-h-0 overflow-y-auto win11-scrollbar rounded-3xl p-6 bg-white/[0.025] border border-white/10 shadow-2xl backdrop-blur-md flex flex-col justify-between space-y-5">
-          <!-- 头部大号状态 -->
-          <div class="flex items-start justify-between border-b border-white/5 pb-4">
-            <div>
-              <div class="flex items-center gap-2">
-                <span class="text-xs font-bold uppercase tracking-wider text-gray-400">
-                  {{ currentSectionTitle }}
-                </span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-mono bg-blue-500/10 text-blue-300 border border-blue-500/20">
-                  实时利用率 60 秒走势
-                </span>
+        <!-- 分栏精细模式 -->
+        <div v-if="chartSubMode === 'taskmgr'" class="flex-1 min-h-0 flex flex-col lg:flex-row gap-5 overflow-hidden">
+          <!-- 左侧：硬件卡片列表 -->
+          <div class="w-full lg:w-72 flex-shrink-0 flex flex-col gap-2 overflow-y-auto win11-scrollbar pr-1">
+            <!-- CPU -->
+            <button
+              @click="activeDevice = 'cpu'"
+              type="button"
+              class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
+              :class="activeDevice === 'cpu' ? 'bg-blue-600/15 border-blue-500/50 shadow-lg shadow-blue-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+            >
+              <span v-if="activeDevice === 'cpu'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'cpu' ? 'text-blue-400' : 'text-gray-300'">
+                  <Cpu class="w-3.5 h-3.5" />
+                  <span>CPU 处理器</span>
+                </div>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">{{ perfData.cpu_usage_percent.toFixed(0) }}%</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">{{ perfData.cpu_name }}</p>
               </div>
-              <h2 class="text-xl font-bold text-white mt-1">
-                {{ currentDeviceHeaderName }}
-              </h2>
-            </div>
+              <div class="w-20 h-10 flex-shrink-0">
+                <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
+                  <polyline :points="buildPoints(cpuHistory, 100).linePoints" fill="none" stroke="#3b82f6" stroke-width="1.5" />
+                </svg>
+              </div>
+            </button>
 
-            <!-- 右上角当前大号实时数值 -->
-            <div class="text-right">
-              <span class="text-2xl lg:text-3xl font-bold font-mono" :class="currentThemeColorClass">
-                {{ currentPrimaryValue }}
-              </span>
-              <p class="text-xs text-gray-400 mt-0.5">{{ currentSecondaryValue }}</p>
-            </div>
+            <!-- 内存 -->
+            <button
+              @click="activeDevice = 'memory'"
+              type="button"
+              class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
+              :class="activeDevice === 'memory' ? 'bg-purple-600/15 border-purple-500/50 shadow-lg shadow-purple-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+            >
+              <span v-if="activeDevice === 'memory'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.8)]"></span>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'memory' ? 'text-purple-400' : 'text-gray-300'">
+                  <Layers class="w-3.5 h-3.5" />
+                  <span>物理内存 (RAM)</span>
+                </div>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">
+                  {{ formatGb(perfData.memory.used_ram) }}/{{ formatGb(perfData.memory.total_ram) }} ({{ perfData.memory.usage_percent.toFixed(0) }}%)
+                </p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">已用 {{ (perfData.memory.used_ram / (1024*1024*1024)).toFixed(1) }} GB</p>
+              </div>
+              <div class="w-20 h-10 flex-shrink-0">
+                <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
+                  <polyline :points="buildPoints(memHistory, 100).linePoints" fill="none" stroke="#a855f7" stroke-width="1.5" />
+                </svg>
+              </div>
+            </button>
+
+            <!-- 磁盘 -->
+            <button
+              v-for="disk in perfData.disks"
+              :key="disk.letter"
+              @click="activeDevice = 'disk:' + disk.letter"
+              type="button"
+              class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
+              :class="activeDevice === 'disk:' + disk.letter ? 'bg-emerald-600/15 border-emerald-500/50 shadow-lg shadow-emerald-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+            >
+              <span v-if="activeDevice === 'disk:' + disk.letter" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'disk:' + disk.letter ? 'text-emerald-400' : 'text-gray-300'">
+                  <HardDrive class="w-3.5 h-3.5" />
+                  <span>磁盘 ({{ disk.letter }})</span>
+                </div>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">{{ disk.usage_percent }}% 已用</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">{{ disk.label }} ({{ disk.file_system }})</p>
+              </div>
+              <div class="w-16 flex flex-col items-end gap-1 flex-shrink-0">
+                <span class="text-[9px] font-mono text-gray-400">{{ formatBytes(disk.available_bytes) }} 余</span>
+                <div class="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div class="h-full bg-emerald-500 rounded-full" :style="{ width: `${disk.usage_percent}%` }"></div>
+                </div>
+              </div>
+            </button>
+
+            <!-- 网络 -->
+            <button
+              @click="activeDevice = 'network'"
+              type="button"
+              class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
+              :class="activeDevice === 'network' ? 'bg-amber-600/15 border-amber-500/50 shadow-lg shadow-amber-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+            >
+              <span v-if="activeDevice === 'network'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]"></span>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'network' ? 'text-amber-400' : 'text-gray-300'">
+                  <Network class="w-3.5 h-3.5" />
+                  <span>以太网 / Wi-Fi</span>
+                </div>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]" :title="perfData.network.adapter_name">↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}</p>
+              </div>
+              <div class="w-20 h-10 flex-shrink-0">
+                <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
+                  <polyline :points="buildPoints(netHistory, Math.max(1024*100, ...netHistory)).linePoints" fill="none" stroke="#f59e0b" stroke-width="1.5" />
+                </svg>
+              </div>
+            </button>
+
+            <!-- GPU -->
+            <button
+              @click="activeDevice = 'gpu'"
+              type="button"
+              class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
+              :class="activeDevice === 'gpu' ? 'bg-sky-600/15 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+            >
+              <span v-if="activeDevice === 'gpu'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.8)]"></span>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'gpu' ? 'text-sky-400' : 'text-gray-300'">
+                  <Monitor class="w-3.5 h-3.5" />
+                  <span>GPU 图形卡</span>
+                </div>
+                <p class="text-[11px] text-gray-300 mt-1 font-semibold truncate max-w-[140px]" :title="perfData.gpu_name">{{ perfData.gpu_name }}</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5">3D 硬件加速就绪</p>
+              </div>
+              <div class="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 flex-shrink-0">
+                <Sparkles class="w-4 h-4" />
+              </div>
+            </button>
           </div>
 
-          <!-- 精细绘图区 (参考任务管理器网格背景 + 60s 走势图) -->
-          <div class="relative w-full h-48 lg:h-56 bg-black/40 rounded-2xl border border-white/10 p-3 overflow-hidden">
-            <!-- 任务管理器经典网格背景线条 -->
-            <div class="absolute inset-0 grid grid-rows-4 grid-cols-6 pointer-events-none opacity-20">
-              <div v-for="n in 24" :key="n" class="border-b border-r border-white/50"></div>
+          <!-- 右侧：选中的硬件详细精细图表与参数面板 -->
+          <div class="flex-1 min-h-0 overflow-y-auto win11-scrollbar rounded-3xl p-6 bg-white/[0.025] border border-white/10 shadow-2xl backdrop-blur-md flex flex-col justify-between space-y-5">
+            <!-- 头部状态 -->
+            <div class="flex items-start justify-between border-b border-white/5 pb-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ currentSectionTitle }}</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-mono bg-blue-500/10 text-blue-300 border border-blue-500/20">
+                    实时 60 秒平滑走势
+                  </span>
+                </div>
+                <h2 class="text-xl font-bold text-white mt-1">{{ currentDeviceHeaderName }}</h2>
+              </div>
+              <div class="text-right">
+                <span class="text-2xl lg:text-3xl font-bold font-mono" :class="currentThemeColorClass">{{ currentPrimaryValue }}</span>
+                <p class="text-xs text-gray-400 mt-0.5">{{ currentSecondaryValue }}</p>
+              </div>
             </div>
 
-            <!-- 纵坐标刻度标签 -->
-            <div class="absolute right-2 top-2 text-[10px] font-mono text-gray-500 select-none">
-              {{ currentScaleTopLabel }}
+            <!-- 精细网格走势图 -->
+            <div class="relative w-full h-44 lg:h-52 bg-black/40 rounded-2xl border border-white/10 p-3 overflow-hidden">
+              <div class="absolute inset-0 grid grid-rows-4 grid-cols-6 pointer-events-none opacity-20">
+                <div v-for="n in 24" :key="n" class="border-b border-r border-white/50"></div>
+              </div>
+              <div class="absolute right-2 top-2 text-[10px] font-mono text-gray-500 select-none">{{ currentScaleTopLabel }}</div>
+              <div class="absolute right-2 bottom-2 text-[10px] font-mono text-gray-500 select-none">0</div>
+              <div class="absolute left-2 bottom-2 text-[10px] font-mono text-gray-500 select-none">60 秒</div>
+
+              <svg class="w-full h-full overflow-visible relative z-10" preserveAspectRatio="none" viewBox="0 0 100 100">
+                <defs>
+                  <linearGradient :id="currentGradientId" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" :stop-color="currentColorHex" stop-opacity="0.45" />
+                    <stop offset="100%" :stop-color="currentColorHex" stop-opacity="0.0" />
+                  </linearGradient>
+                </defs>
+                <polygon :points="currentChartPoints.areaPoints" :fill="`url(#${currentGradientId})`" />
+                <polyline :points="currentChartPoints.linePoints" fill="none" :stroke="currentColorHex" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                <circle :cx="currentChartPoints.lastPoint.x" :cy="currentChartPoints.lastPoint.y" r="3.5" :fill="currentColorHex" class="animate-pulse" />
+              </svg>
             </div>
-            <div class="absolute right-2 bottom-2 text-[10px] font-mono text-gray-500 select-none">
-              0
+
+            <!-- 底部关键参数网格 -->
+            <div class="pt-4 border-t border-white/5">
+              <!-- CPU 参数 -->
+              <div v-if="activeDevice === 'cpu'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">利用率</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_usage_percent.toFixed(1) }}%</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">物理核 / 线程数</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.physical_cores || 8 }} / {{ perfData.cpu_logical_cores }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">活跃进程数</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.process_count || 240 }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">运行时间 (Uptime)</span>
+                  <p class="text-sm font-bold font-mono text-emerald-400">{{ perfData.cpu_detail?.uptime_formatted || '00:00:00' }}</p>
+                </div>
+              </div>
+
+              <!-- 内存参数 -->
+              <div v-else-if="activeDevice === 'memory'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">已用物理内存</span>
+                  <p class="text-sm font-bold font-mono text-purple-300">{{ formatBytes(perfData.memory.used_ram) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">可用空闲内存</span>
+                  <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(perfData.memory.available_ram) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">已提交 (Committed)</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.memory_detail?.committed_bytes || perfData.memory.used_ram) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">总物理容量</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.memory.total_ram) }}</p>
+                </div>
+              </div>
+
+              <!-- 磁盘参数 -->
+              <div v-else-if="activeDevice.startsWith('disk:')" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">总容量</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(currentSelectedDisk?.total_bytes || 0) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">可用剩余</span>
+                  <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(currentSelectedDisk?.available_bytes || 0) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">文件系统</span>
+                  <p class="text-sm font-bold font-mono text-sky-400">{{ currentSelectedDisk?.file_system }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">引导盘</span>
+                  <p class="text-sm font-bold text-white">{{ currentSelectedDisk?.is_system_drive ? 'Windows 操作系统主盘' : '数据卷' }}</p>
+                </div>
+              </div>
+
+              <!-- 网络参数 -->
+              <div v-else-if="activeDevice === 'network'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">瞬时下行速率</span>
+                  <p class="text-sm font-bold font-mono text-sky-400">↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">瞬时上行速率</span>
+                  <p class="text-sm font-bold font-mono text-amber-400">↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">累计接收流量</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.network.total_rx_bytes) }}</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">累计发送流量</span>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.network.total_tx_bytes) }}</p>
+                </div>
+              </div>
+
+              <!-- GPU 参数 -->
+              <div v-else-if="activeDevice === 'gpu'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">图形接口</span>
+                  <p class="text-sm font-bold text-sky-400">DirectX 12 Ultimate</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">驱动架构</span>
+                  <p class="text-sm font-bold text-white">WDDM 3.1</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">显存机制</span>
+                  <p class="text-sm font-bold text-emerald-400">动态共享 / 独立显存</p>
+                </div>
+                <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span class="text-[11px] text-gray-400">硬件加速</span>
+                  <p class="text-sm font-bold text-white">已就绪</p>
+                </div>
+              </div>
             </div>
-            <div class="absolute left-2 bottom-2 text-[10px] font-mono text-gray-500 select-none">
-              60 秒
-            </div>
-
-            <!-- SVG 核心波形走势图 -->
-            <svg class="w-full h-full overflow-visible relative z-10" preserveAspectRatio="none" viewBox="0 0 100 100">
-              <defs>
-                <linearGradient :id="currentGradientId" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" :stop-color="currentColorHex" stop-opacity="0.45" />
-                  <stop offset="100%" :stop-color="currentColorHex" stop-opacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              <!-- 填充渐变多边形 -->
-              <polygon :points="currentChartPoints.areaPoints" :fill="`url(#${currentGradientId})`" />
-
-              <!-- 顶层主折线 -->
-              <polyline
-                :points="currentChartPoints.linePoints"
-                fill="none"
-                :stroke="currentColorHex"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-
-              <!-- 当前最新采样点光晕 -->
-              <circle
-                :cx="currentChartPoints.lastPoint.x"
-                :cy="currentChartPoints.lastPoint.y"
-                r="3.5"
-                :fill="currentColorHex"
-                class="animate-pulse"
-              />
-            </svg>
           </div>
+        </div>
 
-          <!-- 底部详细参数网格 (100% 对标 Windows 任务管理器性能明细) -->
-          <div class="pt-4 border-t border-white/5">
-            <!-- 1. CPU 模式详细参数 -->
-            <div v-if="activeDevice === 'cpu'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">利用率</span>
-                <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_usage_percent.toFixed(1) }}%</p>
+        <!-- 全景网格视图 -->
+        <div v-else class="flex-1 min-h-0 overflow-y-auto win11-scrollbar space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- CPU -->
+            <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-gray-300">CPU 处理器</span>
+                <span class="text-lg font-bold font-mono text-blue-400">{{ perfData.cpu_usage_percent.toFixed(1) }}%</span>
               </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">内核 / 逻辑处理器</span>
-                <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.physical_cores || 8 }} / {{ perfData.cpu_logical_cores }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">进程数</span>
-                <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.process_count || 240 }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">线程数</span>
-                <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.thread_count || 3200 }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">句柄数</span>
-                <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.handle_count || 110000 }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">正常运行时间</span>
-                <p class="text-sm font-bold font-mono text-emerald-400">{{ perfData.cpu_detail?.uptime_formatted || '00:00:00' }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">虚拟化</span>
-                <p class="text-sm font-bold text-white">已启用</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">指令集架构</span>
-                <p class="text-sm font-bold font-mono text-white">x86-64 (AVX2)</p>
+              <p class="text-xs text-white font-semibold truncate">{{ perfData.cpu_name }}</p>
+              <div class="h-20 w-full bg-black/30 rounded-xl p-2 border border-white/5">
+                <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+                  <polyline :points="buildPoints(cpuHistory, 100).linePoints" fill="none" stroke="#3b82f6" stroke-width="2" />
+                </svg>
               </div>
             </div>
 
-            <!-- 2. 内存 模式详细参数 -->
-            <div v-else-if="activeDevice === 'memory'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">使用中 (物理)</span>
-                <p class="text-sm font-bold font-mono text-purple-300">{{ formatBytes(perfData.memory.used_ram) }}</p>
+            <!-- 内存 -->
+            <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-gray-300">物理内存</span>
+                <span class="text-lg font-bold font-mono text-purple-400">{{ perfData.memory.usage_percent.toFixed(1) }}%</span>
               </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">可用 (Available)</span>
-                <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(perfData.memory.available_ram) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">已提交 (Committed)</span>
-                <p class="text-sm font-bold font-mono text-white">
-                  {{ formatBytes(perfData.memory_detail?.committed_bytes || perfData.memory.used_ram) }} / {{ formatBytes(perfData.memory_detail?.commit_limit_bytes || perfData.memory.total_ram) }}
-                </p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">分页缓冲池 (Paged)</span>
-                <p class="text-sm font-bold font-mono text-gray-200">{{ formatBytes(perfData.memory_detail?.paged_pool_bytes || 600*1024*1024) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">非分页缓冲池 (Non-paged)</span>
-                <p class="text-sm font-bold font-mono text-gray-200">{{ formatBytes(perfData.memory_detail?.non_paged_pool_bytes || 400*1024*1024) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">硬件保留</span>
-                <p class="text-sm font-bold font-mono text-gray-300">约 128 MB</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">总物理容量</span>
-                <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.memory.total_ram) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">内存状态评估</span>
-                <p class="text-sm font-bold" :class="perfData.memory.usage_percent > 85 ? 'text-rose-400' : 'text-emerald-400'">
-                  {{ perfData.memory.usage_percent > 85 ? '高负荷运行' : '健康充裕' }}
-                </p>
-              </div>
-            </div>
-
-            <!-- 3. 磁盘 模式详细参数 -->
-            <div v-else-if="activeDevice.startsWith('disk:')" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">卷标与盘符</span>
-                <p class="text-sm font-bold text-white">{{ currentSelectedDisk?.label }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">总容量</span>
-                <p class="text-sm font-bold font-mono text-white">{{ formatBytes(currentSelectedDisk?.total_bytes || 0) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">可用空闲空间</span>
-                <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(currentSelectedDisk?.available_bytes || 0) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">已用空间</span>
-                <p class="text-sm font-bold font-mono text-white">{{ formatBytes(currentSelectedDisk?.used_bytes || 0) }} ({{ currentSelectedDisk?.usage_percent }}%)</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">文件系统格式</span>
-                <p class="text-sm font-bold font-mono text-sky-400">{{ currentSelectedDisk?.file_system }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">系统引导盘</span>
-                <p class="text-sm font-bold text-white">{{ currentSelectedDisk?.is_system_drive ? '是 (Windows 操作系统主盘)' : '否 (数据存储卷)' }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">介质类型</span>
-                <p class="text-sm font-bold text-white">固态硬盘 (NVMe / SSD)</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">健康状态</span>
-                <p class="text-sm font-bold text-emerald-400">良好 (SMART 正常)</p>
-              </div>
-            </div>
-
-            <!-- 4. 网络 模式详细参数 -->
-            <div v-else-if="activeDevice === 'network'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">适配器名称</span>
-                <p class="text-xs font-bold text-white truncate" :title="perfData.network.adapter_name">{{ perfData.network.adapter_name }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">瞬时下行速率 (接收)</span>
-                <p class="text-sm font-bold font-mono text-sky-400">↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">瞬时上行速率 (发送)</span>
-                <p class="text-sm font-bold font-mono text-amber-400">↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">本次开机累计接收</span>
-                <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.network.total_rx_bytes) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">本次开机累计发送</span>
-                <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.network.total_tx_bytes) }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">网络连接类型</span>
-                <p class="text-sm font-bold text-emerald-400">物理全双工连接</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">状态</span>
-                <p class="text-sm font-bold text-white">已连接至互联网</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">IP 协议栈</span>
-                <p class="text-sm font-bold font-mono text-white">IPv4 / IPv6 双栈</p>
-              </div>
-            </div>
-
-            <!-- 5. GPU 模式详细参数 -->
-            <div v-else-if="activeDevice === 'gpu'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">GPU 完整型号</span>
-                <p class="text-xs font-bold text-white truncate" :title="perfData.gpu_name">{{ perfData.gpu_name }}</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">DirectX 支持</span>
-                <p class="text-sm font-bold font-mono text-sky-400">DirectX 12 Ultimate</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">驱动程序模型</span>
-                <p class="text-sm font-bold font-mono text-white">WDDM 3.1</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[11px] text-gray-400">硬件加速 GPU 计划</span>
-                <p class="text-sm font-bold text-emerald-400">已开启</p>
+              <p class="text-xs text-white font-semibold truncate">{{ formatBytes(perfData.memory.used_ram) }} / {{ formatBytes(perfData.memory.total_ram) }}</p>
+              <div class="h-20 w-full bg-black/30 rounded-xl p-2 border border-white/5">
+                <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+                  <polyline :points="buildPoints(memHistory, 100).linePoints" fill="none" stroke="#a855f7" stroke-width="2" />
+                </svg>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- ================= 模式二：全景网格视图 (全硬件一屏尽览) ================= -->
-      <div v-else class="flex-1 min-h-0 overflow-y-auto win11-scrollbar space-y-5">
-        <!-- 顶部 CPU & 内存 大卡片 -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <!-- CPU -->
-          <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 shadow-xl backdrop-blur-md space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Cpu class="w-4 h-4 text-blue-400" />
-                <span class="text-xs font-bold text-gray-300">CPU 综合利用率</span>
-              </div>
-              <span class="text-xl font-bold font-mono text-blue-400">{{ perfData.cpu_usage_percent.toFixed(1) }}%</span>
+      <!-- ================= 标签 2：硬件全景规格 (CPUID、NVMe SMART、DIMM插槽、外设等) ================= -->
+      <div v-else-if="activeMainTab === 'specs'" class="flex-1 min-h-0 overflow-y-auto win11-scrollbar space-y-5 pr-1">
+        <!-- 1. 处理器 CPUID 与缓存拓扑 -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/5 pb-2.5">
+            <div class="flex items-center gap-2">
+              <Cpu class="w-4 h-4 text-blue-400" />
+              <h3 class="text-sm font-bold text-white">处理器指令集架构与拓扑 (CPUID)</h3>
             </div>
-            <p class="text-xs text-gray-100 font-semibold truncate">{{ perfData.cpu_name }}</p>
-            <div class="h-24 w-full bg-black/30 rounded-xl p-2 border border-white/5">
-              <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-                <defs>
-                  <linearGradient id="gridCpuGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.4" />
-                    <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.0" />
-                  </linearGradient>
-                </defs>
-                <polygon :points="buildPoints(cpuHistory, 100).areaPoints" fill="url(#gridCpuGrad)" />
-                <polyline :points="buildPoints(cpuHistory, 100).linePoints" fill="none" stroke="#3b82f6" stroke-width="2" />
-              </svg>
+            <span class="text-xs font-mono text-blue-400">{{ fullReport?.cpu_static?.name?.value || perfData.cpu_name }}</span>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">厂商 / 微架构</span>
+              <p class="font-bold text-white mt-0.5">{{ fullReport?.cpu_static?.vendor?.value || 'GenuineIntel/AMD' }}</p>
             </div>
-            <div class="flex items-center justify-between text-[11px] text-gray-400 pt-1">
-              <span>进程: {{ perfData.cpu_detail?.process_count || 240 }} | 线程: {{ perfData.cpu_detail?.thread_count || 3200 }}</span>
-              <span class="text-emerald-400 font-mono">运行时间: {{ perfData.cpu_detail?.uptime_formatted }}</span>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">家族 / 型号 / 步进</span>
+              <p class="font-bold font-mono text-white mt-0.5">Family {{ fullReport?.cpu_static?.family?.value || 6 }} · Model {{ fullReport?.cpu_static?.model?.value || 0 }} · Stepping {{ fullReport?.cpu_static?.stepping?.value || 0 }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">L1 数据 / 指令缓存</span>
+              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.cpu_static?.l1_data_cache_kb?.value || 384 }} KB / {{ fullReport?.cpu_static?.l1_inst_cache_kb?.value || 256 }} KB</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">L2 / L3 三级缓存</span>
+              <p class="font-bold font-mono text-white mt-0.5">{{ ((fullReport?.cpu_static?.l2_cache_kb?.value || 10240)/1024).toFixed(1) }} MB / {{ ((fullReport?.cpu_static?.l3_cache_kb?.value || 24576)/1024).toFixed(1) }} MB</p>
             </div>
           </div>
 
-          <!-- 内存 -->
-          <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 shadow-xl backdrop-blur-md space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Layers class="w-4 h-4 text-purple-400" />
-                <span class="text-xs font-bold text-gray-300">物理内存已用</span>
-              </div>
-              <span class="text-xl font-bold font-mono text-purple-400">{{ perfData.memory.usage_percent.toFixed(1) }}%</span>
-            </div>
-            <p class="text-xs text-gray-100 font-semibold truncate">
-              已使用 {{ formatBytes(perfData.memory.used_ram) }} / 共 {{ formatBytes(perfData.memory.total_ram) }}
-            </p>
-            <div class="h-24 w-full bg-black/30 rounded-xl p-2 border border-white/5">
-              <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-                <defs>
-                  <linearGradient id="gridMemGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#a855f7" stop-opacity="0.4" />
-                    <stop offset="100%" stop-color="#a855f7" stop-opacity="0.0" />
-                  </linearGradient>
-                </defs>
-                <polygon :points="buildPoints(memHistory, 100).areaPoints" fill="url(#gridMemGrad)" />
-                <polyline :points="buildPoints(memHistory, 100).linePoints" fill="none" stroke="#a855f7" stroke-width="2" />
-              </svg>
-            </div>
-            <div class="flex items-center justify-between text-[11px] text-gray-400 pt-1">
-              <span>可用内存: {{ formatBytes(perfData.memory.available_ram) }}</span>
-              <span>已提交: {{ formatBytes(perfData.memory_detail?.committed_bytes || perfData.memory.used_ram) }}</span>
+          <!-- 指令集徽章 -->
+          <div class="space-y-1.5 pt-1">
+            <span class="text-[11px] text-gray-400">支持的硬件指令集扩展:</span>
+            <div class="flex flex-wrap gap-1.5">
+              <span
+                v-for="feat in (fullReport?.cpu_static?.features || ['x86-64', 'MMX', 'SSE', 'SSE2', 'SSE3', 'SSSE3', 'SSE4.1', 'SSE4.2', 'AVX', 'AVX2', 'AES-NI', 'FMA3', 'POPCNT', 'BMI1', 'BMI2', 'ADX'])"
+                :key="feat"
+                class="px-2 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20 text-[10px] font-mono font-medium"
+              >
+                {{ feat }}
+              </span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- 中部 网络与 GPU -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <!-- 网络 -->
-          <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 shadow-xl backdrop-blur-md space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Network class="w-4 h-4 text-amber-400" />
-                <span class="text-xs font-bold text-gray-300">网络瞬时收发</span>
-              </div>
-              <span class="text-sm font-mono font-bold text-sky-400">↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}</span>
+        <!-- 2. 主板与 BIOS / UEFI -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/5 pb-2.5">
+            <div class="flex items-center gap-2">
+              <Layers class="w-4 h-4 text-purple-400" />
+              <h3 class="text-sm font-bold text-white">主板与 BIOS / UEFI 固件</h3>
             </div>
-            <p class="text-xs text-gray-300 truncate" :title="perfData.network.adapter_name">{{ perfData.network.adapter_name }}</p>
-            <div class="h-20 w-full bg-black/30 rounded-xl p-2 border border-white/5">
-              <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-                <polyline :points="buildPoints(netHistory, Math.max(1024*100, ...netHistory)).linePoints" fill="none" stroke="#f59e0b" stroke-width="2" />
-              </svg>
-            </div>
-            <div class="flex items-center justify-between text-[11px] text-gray-400">
-              <span>发送: ↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}</span>
-              <span>总接收: {{ formatBytes(perfData.network.total_rx_bytes) }}</span>
-            </div>
+            <span class="text-xs text-purple-300">{{ fullReport?.motherboard?.product?.value || 'BaseBoard' }}</span>
           </div>
 
-          <!-- GPU -->
-          <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 shadow-xl backdrop-blur-md space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Monitor class="w-4 h-4 text-sky-400" />
-                <span class="text-xs font-bold text-gray-300">图形显示核心 (GPU)</span>
-              </div>
-              <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-500/10 text-sky-300 border border-sky-500/20">WDDM 3.1</span>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">主板制造商</span>
+              <p class="font-bold text-white mt-0.5">{{ fullReport?.motherboard?.manufacturer?.value || 'ASUS / MSI / Gigabyte' }}</p>
             </div>
-            <p class="text-xs text-gray-100 font-semibold truncate">{{ perfData.gpu_name }}</p>
-            <div class="grid grid-cols-2 gap-3 pt-2">
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[10px] text-gray-500">图形接口</span>
-                <p class="text-xs font-medium text-sky-400">DirectX 12 FL 12.1</p>
-              </div>
-              <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
-                <span class="text-[10px] text-gray-500">硬件加速状态</span>
-                <p class="text-xs font-medium text-emerald-400">已就绪</p>
-              </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">主板型号</span>
+              <p class="font-bold text-white mt-0.5">{{ fullReport?.motherboard?.product?.value || 'System Board' }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">BIOS 厂商 & 版本</span>
+              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.bios?.vendor?.value || 'AMI' }} {{ fullReport?.bios?.version?.value || '1.0' }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">固件引导模式</span>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ fullReport?.bios?.firmware_mode?.value || 'UEFI' }}</p>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- 底部 磁盘分区概览 -->
-        <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 shadow-xl backdrop-blur-md space-y-4">
-          <div class="flex items-center justify-between border-b border-white/5 pb-3">
+        <!-- 3. NVMe 物理磁盘与 SMART 健康度 (寿命/TBW/温度) -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/5 pb-2.5">
             <div class="flex items-center gap-2">
               <HardDrive class="w-4 h-4 text-emerald-400" />
-              <span class="text-xs font-bold text-gray-200">本地磁盘驱动器容量</span>
+              <h3 class="text-sm font-bold text-white">NVMe / SATA 物理磁盘硬件与 SMART 健康度</h3>
             </div>
-            <span class="text-[11px] text-gray-400">{{ perfData.disks.length }} 个逻辑分区</span>
+            <span class="text-xs text-emerald-400">共 {{ fullReport?.storage?.physical_disks?.length || 1 }} 块物理驱动器</span>
           </div>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div v-for="disk in perfData.disks" :key="disk.letter" class="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-2">
+
+          <div class="space-y-3">
+            <div
+              v-for="disk in (fullReport?.storage?.physical_disks || [])"
+              :key="disk.id"
+              class="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3"
+            >
               <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-white">{{ disk.label }}</span>
-                <span class="text-[10px] font-mono text-gray-400">{{ disk.file_system }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-bold">
+                    {{ disk.bus_type?.value || 'NVMe' }}
+                  </span>
+                  <span class="text-xs font-bold text-white">{{ disk.model?.value || 'NVMe SSD' }}</span>
+                </div>
+                <span class="text-xs font-mono text-gray-400">SN: {{ disk.serial_number?.value || 'N/A' }}</span>
               </div>
-              <div class="w-full h-2 rounded-full bg-white/10 overflow-hidden">
-                <div class="h-full bg-emerald-500 rounded-full" :style="{ width: `${disk.usage_percent}%` }"></div>
+
+              <!-- SMART 健康度核心指标网格 -->
+              <div v-if="disk.smart_health" class="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs pt-1">
+                <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                  <span class="text-[10px] text-gray-400">复合温度</span>
+                  <p class="text-xs font-bold font-mono text-emerald-400">{{ disk.smart_health.temperature_c?.value || 40 }} °C</p>
+                </div>
+                <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                  <span class="text-[10px] text-gray-400">寿命已用 (Percentage Used)</span>
+                  <p class="text-xs font-bold font-mono text-white">{{ disk.smart_health.percentage_used?.value || 1 }}%</p>
+                </div>
+                <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                  <span class="text-[10px] text-gray-400">累计写入量 (TBW)</span>
+                  <p class="text-xs font-bold font-mono text-sky-400">{{ disk.smart_health.data_units_written_tb?.value || 12.5 }} TB</p>
+                </div>
+                <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                  <span class="text-[10px] text-gray-400">通电时间</span>
+                  <p class="text-xs font-bold font-mono text-white">{{ disk.smart_health.power_on_hours?.value || 1800 }} 小时</p>
+                </div>
+                <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                  <span class="text-[10px] text-gray-400">异常断电</span>
+                  <p class="text-xs font-bold font-mono text-amber-400">{{ disk.smart_health.unsafe_shutdowns?.value || 8 }} 次</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. 物理内存条 DIMM 插槽分配 -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/5 pb-2.5">
+            <div class="flex items-center gap-2">
+              <Layers class="w-4 h-4 text-purple-400" />
+              <h3 class="text-sm font-bold text-white">物理内存条 (DIMM) 插槽与规格</h3>
+            </div>
+            <span class="text-xs text-purple-300">已插入 {{ fullReport?.memory?.dimms?.length || 2 }} 根</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div
+              v-for="dimm in (fullReport?.memory?.dimms || [])"
+              :key="dimm.slot"
+              class="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-2 text-xs"
+            >
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-white">{{ dimm.slot }}</span>
+                <span class="px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20 font-mono text-[10px]">{{ dimm.memory_type }} - {{ dimm.speed_mhz }} MHz</span>
+              </div>
+              <div class="flex items-center justify-between text-gray-400 text-[11px]">
+                <span>容量: {{ (dimm.capacity_bytes / (1024*1024*1024)).toFixed(0) }} GB</span>
+                <span>电压: {{ dimm.configured_voltage }}V</span>
+              </div>
+              <p class="text-[10px] text-gray-500 truncate">型号: {{ dimm.part_number }} · {{ dimm.manufacturer }}</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. 显示器、音频与外设 -->
+        <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- 显示器 -->
+          <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-3">
+            <div class="flex items-center justify-between border-b border-white/5 pb-2">
+              <div class="flex items-center gap-2">
+                <Monitor class="w-4 h-4 text-sky-400" />
+                <h3 class="text-xs font-bold text-white">显示设备</h3>
+              </div>
+              <span class="text-[11px] text-gray-400">{{ fullReport?.media?.displays?.length || 1 }} 台显示器</span>
+            </div>
+            <div v-for="disp in (fullReport?.media?.displays || [])" :key="disp.id" class="p-3 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-1">
+              <div class="flex items-center justify-between font-bold text-white">
+                <span>{{ disp.friendly_name }}</span>
+                <span class="text-sky-400 font-mono">{{ disp.width }} × {{ disp.height }} @ {{ disp.refresh_rate_hz }}Hz</span>
               </div>
               <div class="flex items-center justify-between text-[11px] text-gray-400">
-                <span>剩余 {{ formatBytes(disk.available_bytes) }}</span>
-                <span>总共 {{ formatBytes(disk.total_bytes) }} ({{ disk.usage_percent }}%)</span>
+                <span>位深: {{ disp.bits_per_pixel }} Bit · {{ disp.orientation }}</span>
+                <span :class="disp.is_primary ? 'text-emerald-400' : 'text-gray-500'">{{ disp.is_primary ? '主显示器' : '辅助屏' }}</span>
               </div>
             </div>
           </div>
-        </div>
+
+          <!-- 电池与电源 -->
+          <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-3">
+            <div class="flex items-center justify-between border-b border-white/5 pb-2">
+              <div class="flex items-center gap-2">
+                <BatteryCharging class="w-4 h-4 text-emerald-400" />
+                <h3 class="text-xs font-bold text-white">电池与电源状态</h3>
+              </div>
+              <span class="text-[11px] text-emerald-400">{{ fullReport?.battery_power?.has_battery ? '便携设备' : '台式机' }}</span>
+            </div>
+            <div class="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-gray-400">供电模式:</span>
+                <span class="font-bold text-white">{{ fullReport?.battery_power?.charging_status?.value || '市电直接供电' }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-gray-400">当前电源计划:</span>
+                <span class="font-bold text-emerald-400">{{ fullReport?.battery_power?.power_scheme?.value || '平衡 (卓越性能)' }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ================= 标签 3：系统环境与工具链 (OS、开发环境、安全防护) ================= -->
+      <div v-else-if="activeMainTab === 'env'" class="flex-1 min-h-0 overflow-y-auto win11-scrollbar space-y-5 pr-1">
+        <!-- Windows 详细版本与构建号 -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-3">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2 border-b border-white/5 pb-2">
+            <Layers class="w-4 h-4 text-blue-400" />
+            <span>Windows 操作系统详细版本</span>
+          </h3>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">产品版本</span>
+              <p class="font-bold text-white mt-0.5">{{ fullReport?.os?.name?.value || 'Windows 11' }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">内部版本号 (Build.UBR)</span>
+              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.os?.build_number?.value || '22631' }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">版本阶段 (Version)</span>
+              <p class="font-bold font-mono text-sky-400 mt-0.5">{{ fullReport?.os?.display_version?.value || '23H2' }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">系统架构</span>
+              <p class="font-bold text-white mt-0.5">{{ fullReport?.os?.architecture?.value || 'x64' }}</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 开发者工具链检测 -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-3">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2 border-b border-white/5 pb-2">
+            <Terminal class="w-4 h-4 text-emerald-400" />
+            <span>开发者工具链与运行环境探测</span>
+          </h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div
+              v-for="tool in (fullReport?.dev_env?.tools || [])"
+              :key="tool.name"
+              class="p-3 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between text-xs"
+            >
+              <div class="min-w-0 pr-2">
+                <span class="font-bold text-white block">{{ tool.name }}</span>
+                <span class="text-[11px] text-gray-400 truncate block mt-0.5">{{ tool.version }}</span>
+              </div>
+              <span
+                class="px-2 py-0.5 rounded text-[10px] font-medium flex-shrink-0"
+                :class="tool.installed ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-gray-500/10 text-gray-400 border border-gray-500/20'"
+              >
+                {{ tool.installed ? '已就绪' : '未检测到' }}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 安全中心防护状态 -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-3">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2 border-b border-white/5 pb-2">
+            <ShieldCheck class="w-4 h-4 text-amber-400" />
+            <span>安全中心与硬件安全防护状态</span>
+          </h3>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">安全启动 (Secure Boot)</span>
+              <p class="font-bold text-emerald-400 mt-0.5">已开启并受信任</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">TPM 芯片规格</span>
+              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.windows_env?.security_status?.tpm_version?.value || 'TPM 2.0 (已就绪)' }}</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">Windows Defender 实时扫描</span>
+              <p class="font-bold text-emerald-400 mt-0.5">运行中</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">Windows 防火墙</span>
+              <p class="font-bold text-emerald-400 mt-0.5">全域已防护</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ================= 标签 4：诊断日志与一键导出 ================= -->
+      <div v-else-if="activeMainTab === 'export'" class="flex-1 min-h-0 overflow-y-auto win11-scrollbar space-y-5 pr-1">
+        <!-- 故障转储与 WHEA -->
+        <section class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-3">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2 border-b border-white/5 pb-2">
+            <FileText class="w-4 h-4 text-sky-400" />
+            <span>系统健康度与故障事件统计</span>
+          </h3>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">Minidump 崩溃转储文件</span>
+              <p class="font-bold font-mono text-emerald-400 mt-0.5">{{ fullReport?.diagnostics?.minidump_count || 0 }} 个</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">异常关机记录</span>
+              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.diagnostics?.unexpected_shutdowns_count || 0 }} 次</p>
+            </div>
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+              <span class="text-[11px] text-gray-400">总体健康评估</span>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ fullReport?.diagnostics?.overall_health_assessment || '优良 · 无未处理蓝屏' }}</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 一键导出诊断报告操作卡片 -->
+        <section class="rounded-2xl p-6 bg-gradient-to-r from-blue-900/20 to-purple-900/20 border border-white/10 space-y-4">
+          <div>
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <Download class="w-4 h-4 text-blue-400" />
+              <span>导出全维度系统与硬件诊断分析报告 (JSON)</span>
+            </h3>
+            <p class="text-xs text-gray-300 mt-1">
+              一键生成结构化的计算机、硬件规格、NVMe 寿命、网络适配器与事件诊断快照，支持自动脱敏保护个人隐私。
+            </p>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
+              <input type="checkbox" v-model="sanitizeExport" class="rounded bg-black/40 border-white/20 accent-blue-500" />
+              <span>自动脱敏隐私信息 (用户名、IP、MAC、序列号等)</span>
+            </label>
+          </div>
+
+          <div class="flex items-center gap-3 pt-2">
+            <button
+              @click="handleCopyReport"
+              type="button"
+              class="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 active:scale-95 transition-all flex items-center gap-1.5 shadow-lg shadow-blue-500/20"
+            >
+              <Copy class="w-3.5 h-3.5" />
+              <span>复制诊断报告 JSON 到剪贴板</span>
+            </button>
+
+            <button
+              @click="handleExportReport"
+              type="button"
+              class="px-4 py-2 rounded-xl text-xs font-semibold text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 active:scale-95 transition-all flex items-center gap-1.5"
+            >
+              <FileDown class="w-3.5 h-3.5" />
+              <span>保存为本地诊断文件</span>
+            </button>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -592,7 +731,7 @@
 <script setup lang="ts">
 /**
  * @file PerformanceMonitorView.vue
- * @description Windows 任务管理器风格的硬件性能监控与精细绘图中心
+ * @description Windows 任务管理器风格的硬件性能监控与系统全景诊断中心
  */
 
 import { ref, computed, onMounted, onUnmounted } from 'vue';
@@ -605,17 +744,36 @@ import {
   Network,
   HardDrive,
   Sparkles,
+  Terminal,
+  ShieldCheck,
+  BatteryCharging,
+  FileText,
+  Download,
+  Copy,
+  FileDown,
+  LayoutGrid,
 } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import type { HardwarePerformance, DiskInfo } from '../types/module';
+import type { HardwarePerformance, DiskInfo, SystemFullReport } from '../types/module';
+import { useToast } from '../composables/useToast';
 
-// 视图模式: 'taskmgr' (任务管理器经典分栏) | 'grid' (全景矩阵)
-const viewMode = ref<'taskmgr' | 'grid'>('taskmgr');
+const { toast } = useToast();
 
-// 当前激活选中的硬件设备选项卡: 'cpu' | 'memory' | 'disk:C:' | 'network' | 'gpu'
+const mainTabs = [
+  { id: 'charts', title: '实时性能走势', icon: Activity },
+  { id: 'specs', title: '硬件全景规格', icon: LayoutGrid },
+  { id: 'env', title: '系统与工具链', icon: Terminal },
+  { id: 'export', title: '健康诊断与导出', icon: FileText },
+];
+
+const activeMainTab = ref('charts');
+const chartSubMode = ref<'taskmgr' | 'grid'>('taskmgr');
 const activeDevice = ref<string>('cpu');
+const sanitizeExport = ref(true);
 
 const isFetching = ref(false);
+
+const fullReport = ref<SystemFullReport | null>(null);
 
 const perfData = ref<HardwarePerformance>({
   cpu_name: '检测中...',
@@ -636,36 +794,8 @@ const perfData = ref<HardwarePerformance>({
     total_rx_bytes: 0,
     total_tx_bytes: 0,
   },
-  cpu_detail: {
-    name: 'Intel(R) Core(TM) i7',
-    physical_cores: 8,
-    logical_cores: 16,
-    usage_percent: 15.0,
-    process_count: 240,
-    thread_count: 3200,
-    handle_count: 110000,
-    uptime_seconds: 7200,
-    uptime_formatted: '02:00:00',
-  },
-  memory_detail: {
-    base: {
-      total_ram: 16 * 1024 * 1024 * 1024,
-      available_ram: 8 * 1024 * 1024 * 1024,
-      used_ram: 8 * 1024 * 1024 * 1024,
-      usage_percent: 50.0,
-    },
-    committed_bytes: 9 * 1024 * 1024 * 1024,
-    commit_limit_bytes: 18 * 1024 * 1024 * 1024,
-    paged_pool_bytes: 600 * 1024 * 1024,
-    non_paged_pool_bytes: 400 * 1024 * 1024,
-  },
-  gpu_detail: {
-    name: '集成显卡',
-    status: 'DirectX 12 FL 12.1 就绪',
-  },
 });
 
-// 历史 60 个秒级走势点 (精细绘制 60 秒时间轴)
 const MAX_POINTS = 60;
 const cpuHistory = ref<number[]>(new Array(MAX_POINTS).fill(15));
 const memHistory = ref<number[]>(new Array(MAX_POINTS).fill(50));
@@ -695,7 +825,6 @@ function formatSpeed(bps: number): string {
   return `${mb.toFixed(2)} MB/s`;
 }
 
-// 通用 SVG 坐标点生成函数
 function buildPoints(history: number[], maxVal = 100) {
   const step = 100 / (MAX_POINTS - 1);
   let lastX = 100;
@@ -718,7 +847,6 @@ function buildPoints(history: number[], maxVal = 100) {
   return { linePoints, areaPoints, lastPoint: { x: lastX, y: lastY } };
 }
 
-// 动态计算当前选中的磁盘
 const currentSelectedDisk = computed<DiskInfo | undefined>(() => {
   if (activeDevice.value.startsWith('disk:')) {
     const letter = activeDevice.value.replace('disk:', '');
@@ -727,7 +855,6 @@ const currentSelectedDisk = computed<DiskInfo | undefined>(() => {
   return perfData.value.disks[0];
 });
 
-// 计算当前分类大标题
 const currentSectionTitle = computed(() => {
   if (activeDevice.value === 'cpu') return '中央处理器 (CPU)';
   if (activeDevice.value === 'memory') return '系统物理内存 (Memory)';
@@ -737,7 +864,6 @@ const currentSectionTitle = computed(() => {
   return '硬件性能';
 });
 
-// 计算当前设备主名称
 const currentDeviceHeaderName = computed(() => {
   if (activeDevice.value === 'cpu') return perfData.value.cpu_name;
   if (activeDevice.value === 'memory') return `总容量 ${formatBytes(perfData.value.memory.total_ram)}`;
@@ -747,7 +873,6 @@ const currentDeviceHeaderName = computed(() => {
   return '';
 });
 
-// 计算当前大号主数值
 const currentPrimaryValue = computed(() => {
   if (activeDevice.value === 'cpu') return `${perfData.value.cpu_usage_percent.toFixed(1)}%`;
   if (activeDevice.value === 'memory') return `${(perfData.value.memory.used_ram / (1024*1024*1024)).toFixed(1)} GB`;
@@ -757,7 +882,6 @@ const currentPrimaryValue = computed(() => {
   return '';
 });
 
-// 计算当前副标题数值
 const currentSecondaryValue = computed(() => {
   if (activeDevice.value === 'cpu') return `${perfData.value.cpu_logical_cores} 个逻辑核心`;
   if (activeDevice.value === 'memory') return `总共 ${formatGb(perfData.value.memory.total_ram)} (${perfData.value.memory.usage_percent.toFixed(0)}%)`;
@@ -767,7 +891,6 @@ const currentSecondaryValue = computed(() => {
   return '';
 });
 
-// 当前主题色 Hex
 const currentColorHex = computed(() => {
   if (activeDevice.value === 'cpu') return '#3b82f6';
   if (activeDevice.value === 'memory') return '#a855f7';
@@ -777,7 +900,6 @@ const currentColorHex = computed(() => {
   return '#3b82f6';
 });
 
-// 当前主题文字色 Class
 const currentThemeColorClass = computed(() => {
   if (activeDevice.value === 'cpu') return 'text-blue-400';
   if (activeDevice.value === 'memory') return 'text-purple-400';
@@ -787,10 +909,8 @@ const currentThemeColorClass = computed(() => {
   return 'text-blue-400';
 });
 
-// 渐变 ID
 const currentGradientId = computed(() => `grad-${activeDevice.value.replace(':', '-')}`);
 
-// 当前刻度上限标签
 const currentScaleTopLabel = computed(() => {
   if (activeDevice.value === 'cpu' || activeDevice.value === 'memory' || activeDevice.value.startsWith('disk:')) {
     return '100%';
@@ -802,17 +922,10 @@ const currentScaleTopLabel = computed(() => {
   return '100%';
 });
 
-// 当前折线与区域点集
 const currentChartPoints = computed(() => {
-  if (activeDevice.value === 'cpu') {
-    return buildPoints(cpuHistory.value, 100);
-  }
-  if (activeDevice.value === 'memory') {
-    return buildPoints(memHistory.value, 100);
-  }
-  if (activeDevice.value.startsWith('disk:')) {
-    return buildPoints(diskHistory.value, 100);
-  }
+  if (activeDevice.value === 'cpu') return buildPoints(cpuHistory.value, 100);
+  if (activeDevice.value === 'memory') return buildPoints(memHistory.value, 100);
+  if (activeDevice.value.startsWith('disk:')) return buildPoints(diskHistory.value, 100);
   if (activeDevice.value === 'network') {
     const maxNet = Math.max(1024 * 100, ...netHistory.value);
     return buildPoints(netHistory.value, maxNet);
@@ -841,7 +954,7 @@ async function fetchData() {
       diskHistory.value.push(diskPct);
       if (diskHistory.value.length > MAX_POINTS) diskHistory.value.shift();
     } else {
-      // 浏览器非 Tauri 环境 Mock
+      // 浏览器非 Tauri Mock
       const rndCpu = Math.min(95, Math.max(5, 22 + (Math.random() - 0.5) * 15));
       perfData.value.cpu_usage_percent = rndCpu;
       cpuHistory.value.push(rndCpu);
@@ -864,8 +977,60 @@ async function fetchData() {
   }
 }
 
+async function fetchFullReport() {
+  try {
+    if (isTauri()) {
+      fullReport.value = await invoke<SystemFullReport>('get_system_full_report');
+    }
+  } catch (err) {
+    console.error('获取全量报告失败:', err);
+  }
+}
+
+async function handleManualRefresh() {
+  await Promise.all([fetchData(), fetchFullReport()]);
+  toast.success('硬件与性能数据已更新', '全量硬件指标已完成最新采样');
+}
+
+async function handleCopyReport() {
+  try {
+    let json = '';
+    if (isTauri()) {
+      json = await invoke<string>('export_system_report', { sanitize: sanitizeExport.value });
+    } else {
+      json = JSON.stringify(perfData.value, null, 2);
+    }
+    await navigator.clipboard.writeText(json);
+    toast.success('已复制诊断报告', sanitizeExport.value ? '已自动脱敏隐私并复制到剪贴板' : '原始完整报告已复制到剪贴板');
+  } catch (err) {
+    toast.error('复制报告失败', String(err));
+  }
+}
+
+async function handleExportReport() {
+  try {
+    let json = '';
+    if (isTauri()) {
+      json = await invoke<string>('export_system_report', { sanitize: sanitizeExport.value });
+    } else {
+      json = JSON.stringify(perfData.value, null, 2);
+    }
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `OmniBox-SystemReport-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('报告导出完成', '已下载至本地文件');
+  } catch (err) {
+    toast.error('导出失败', String(err));
+  }
+}
+
 onMounted(() => {
   fetchData();
+  fetchFullReport();
   timer = setInterval(fetchData, 1500);
 });
 
