@@ -8,7 +8,7 @@ use std::env;
 #[test]
 fn test_get_memory_info_validity() {
     let mem = get_memory_info().expect("读取系统内存信息应当成功");
-    
+
     // 物理内存总容量必须大于 0 (通常至少大于 1GB)
     assert!(mem.total_ram > 1024 * 1024 * 1024, "总内存应大于 1GB");
     // 可用内存不能大于总内存
@@ -16,9 +16,16 @@ fn test_get_memory_info_validity() {
     // 已用内存不能大于总内存
     assert!(mem.used_ram <= mem.total_ram, "已用内存不应超过总内存");
     // 已用内存与可用内存之和应近似等于总内存
-    assert_eq!(mem.total_ram, mem.used_ram + mem.available_ram, "已用与可用之和应等于总内存");
+    assert_eq!(
+        mem.total_ram,
+        mem.used_ram + mem.available_ram,
+        "已用与可用之和应等于总内存"
+    );
     // 占用率范围必须在 0.0 到 100.0 之间
-    assert!(mem.usage_percent >= 0.0 && mem.usage_percent <= 100.0, "内存使用百分比应在 0.0-100.0 之间");
+    assert!(
+        mem.usage_percent >= 0.0 && mem.usage_percent <= 100.0,
+        "内存使用百分比应在 0.0-100.0 之间"
+    );
 }
 
 #[test]
@@ -145,7 +152,8 @@ fn test_types_serialization() {
         usage_percent: 50.0,
     };
     let json = serde_json::to_string(&mem).expect("序列化 MemoryStatus 应成功");
-    let deserialized: MemoryStatus = serde_json::from_str(&json).expect("反序列化 MemoryStatus 应成功");
+    let deserialized: MemoryStatus =
+        serde_json::from_str(&json).expect("反序列化 MemoryStatus 应成功");
     assert_eq!(mem, deserialized);
 
     let clean = CleanResult {
@@ -159,7 +167,8 @@ fn test_types_serialization() {
         is_admin: true,
     };
     let json_clean = serde_json::to_string(&clean).expect("序列化 CleanResult 应成功");
-    let deserialized_clean: CleanResult = serde_json::from_str(&json_clean).expect("反序列化 CleanResult 应成功");
+    let deserialized_clean: CleanResult =
+        serde_json::from_str(&json_clean).expect("反序列化 CleanResult 应成功");
     assert_eq!(clean, deserialized_clean);
 
     let settings = AppSettings::default();
@@ -176,34 +185,56 @@ fn test_types_serialization() {
         note: "私密备忘".to_string(),
     };
     let json_cloaked = serde_json::to_string(&cloaked).expect("序列化 CloakedItem 应成功");
-    let deserialized_cloaked: CloakedItem = serde_json::from_str(&json_cloaked).expect("反序列化 CloakedItem 应成功");
+    let deserialized_cloaked: CloakedItem =
+        serde_json::from_str(&json_cloaked).expect("反序列化 CloakedItem 应成功");
     assert_eq!(cloaked, deserialized_cloaked);
 }
 
 #[test]
 fn test_cloaker_on_temp_file() {
     use std::fs;
-    let temp_file = std::env::temp_dir().join(format!("omnibox_cloak_test_{}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let temp_file = std::env::temp_dir().join(format!(
+        "omnibox_cloak_test_{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     fs::write(&temp_file, "secret content").expect("写临时测试文件应成功");
 
     let path_str = temp_file.to_string_lossy().to_string();
-    assert!(!super::cloaker::is_path_cloaked(&path_str).unwrap(), "初始状态不应为隐身");
+    assert!(
+        !super::cloaker::is_path_cloaked(&path_str).unwrap(),
+        "初始状态不应为隐身"
+    );
 
     super::cloaker::cloak_path(&path_str).expect("隐身文件应成功");
-    assert!(super::cloaker::is_path_cloaked(&path_str).unwrap(), "施加后应为隐身状态");
+    assert!(
+        super::cloaker::is_path_cloaked(&path_str).unwrap(),
+        "施加后应为隐身状态"
+    );
 
     super::cloaker::uncloak_path(&path_str).expect("解除隐身应成功");
-    assert!(!super::cloaker::is_path_cloaked(&path_str).unwrap(), "解除后不应为隐身");
+    assert!(
+        !super::cloaker::is_path_cloaked(&path_str).unwrap(),
+        "解除后不应为隐身"
+    );
 
     let _ = fs::remove_file(&temp_file);
 }
 
 #[test]
 fn test_hardware_performance_query() {
-    let perf = super::hardware::get_hardware_performance().expect("获取硬件性能快照应成功");
-    assert!(!perf.cpu_name.is_empty(), "CPU 型号不应为空");
-    assert!(perf.cpu_logical_cores > 0, "CPU 逻辑核心数应大于 0");
-    assert!(!perf.disks.is_empty(), "应至少检测到一个磁盘分区 (如 C:)");
+    let perf = super::hardware::get_hardware_performance();
+    assert!(perf.timestamp > 0, "性能快照应包含采样时间");
+    assert!(
+        !perf.provider_status.is_empty(),
+        "性能快照应包含 Provider 状态"
+    );
+    assert!(
+        perf.memory.usage_percent.value.is_some()
+            || perf.memory.usage_percent.quality != super::info::MetricQuality::Good
+    );
 }
 
 #[test]
@@ -211,7 +242,10 @@ fn test_system_tools_list_completeness() {
     let tools = super::sys_tools::get_system_tools_list();
     assert!(tools.len() >= 15, "系统工具库应包含不少于 15 种常用工具");
     assert!(tools.iter().any(|t| t.id == "gpedit"), "应包含组策略编辑器");
-    assert!(tools.iter().any(|t| t.id == "regedit"), "应包含注册表编辑器");
+    assert!(
+        tools.iter().any(|t| t.id == "regedit"),
+        "应包含注册表编辑器"
+    );
     assert!(tools.iter().any(|t| t.id == "compmgmt"), "应包含计算机管理");
 }
 
@@ -219,21 +253,45 @@ fn test_system_tools_list_completeness() {
 fn test_system_tweaks_list() {
     let tweaks = super::tweaks::get_all_tweaks();
     assert!(tweaks.len() >= 5, "系统调优项目应至少包含 5 项");
-    assert!(tweaks.iter().any(|t| t.id == "windows_update"), "应包含 Windows 更新开关");
-    assert!(tweaks.iter().any(|t| t.id == "windows_defender"), "应包含 Defender 开关");
+    assert!(
+        tweaks.iter().any(|t| t.id == "windows_update"),
+        "应包含 Windows 更新开关"
+    );
+    assert!(
+        tweaks.iter().any(|t| t.id == "windows_defender"),
+        "应包含 Defender 开关"
+    );
 }
 
 #[test]
 fn test_collect_full_system_report() {
     let report = super::info::collect_full_system_report();
     assert!(report.timestamp > 0);
-    assert!(!report.computer.hostname.value.as_deref().unwrap_or("").is_empty());
+    assert!(!report
+        .computer
+        .hostname
+        .value
+        .as_deref()
+        .unwrap_or("")
+        .is_empty());
     assert!(!report.os.name.value.as_deref().unwrap_or("").is_empty());
-    assert!(!report.cpu_static.name.value.as_deref().unwrap_or("").is_empty());
+    assert!(!report
+        .cpu_static
+        .name
+        .value
+        .as_deref()
+        .unwrap_or("")
+        .is_empty());
     assert!(!report.gpus.is_empty(), "应至少检测到一个 GPU 设备");
-    assert!(!report.storage.physical_disks.is_empty(), "应至少检测到一个物理驱动器");
+    assert!(
+        !report.storage.physical_disks.is_empty(),
+        "应至少检测到一个物理驱动器"
+    );
     assert!(!report.storage.volumes.is_empty(), "应至少检测到一个逻辑卷");
-    assert!(!report.network.adapters.is_empty(), "应至少检测到一个网络适配器");
+    assert!(
+        !report.network.adapters.is_empty(),
+        "应至少检测到一个网络适配器"
+    );
 }
 
 #[test]
@@ -243,4 +301,98 @@ fn test_export_and_sanitize_report() {
 
     let json_sanitized = super::info::export_system_report_json(true).expect("导出脱敏报告应成功");
     assert!(!json_sanitized.is_empty());
+}
+
+#[test]
+fn rich_snapshot_serializes_null_quality_and_collection_status() {
+    let metric =
+        super::info::MetricValue::<u64>::unsupported_at("Bytes", "fixture", "missing", 1000);
+    let status = super::info::CollectionStatus {
+        quality: super::info::MetricQuality::Unsupported,
+        source: "fixture".to_string(),
+        timestamp: 1000,
+        item_count: Some(0),
+        truncated: false,
+        error: Some("not supported".to_string()),
+    };
+    let json = serde_json::to_string(&(metric, status)).expect("rich JSON should serialize");
+    assert!(json.contains("\"value\":null"));
+    assert!(json.contains("\"quality\":\"Unsupported\""));
+    assert!(json.contains("\"item_count\":0"));
+}
+
+#[test]
+fn rich_performance_contract_round_trips_unsupported_metrics_and_status() {
+    let timestamp = 1000;
+    let unsupported_u64 =
+        || super::info::MetricValue::unsupported_at("Bytes", "fixture", "missing", timestamp);
+    let unsupported_f64 =
+        || super::info::MetricValue::unsupported_at("%", "fixture", "missing", timestamp);
+    let unsupported_text =
+        || super::info::MetricValue::unsupported_at("", "fixture", "missing", timestamp);
+    let provider_status = super::info::CollectionStatus {
+        quality: super::info::MetricQuality::Unsupported,
+        source: "fixture".to_string(),
+        timestamp,
+        item_count: Some(0),
+        truncated: false,
+        error: Some("not supported".to_string()),
+    };
+    let report = super::info::collect_full_system_report();
+    assert!(!report.provider_status.is_empty());
+
+    let performance = super::hardware::HardwarePerformance {
+        timestamp,
+        cpu: super::info::CpuRuntimeInfo {
+            total_usage_percent: unsupported_f64(),
+            user_usage_percent: unsupported_f64(),
+            kernel_usage_percent: unsupported_f64(),
+            idle_percent: unsupported_f64(),
+            base_frequency_mhz: unsupported_u64(),
+            current_frequency_mhz: unsupported_u64(),
+            package_temperature_c: unsupported_f64(),
+            package_power_watts: unsupported_f64(),
+        },
+        memory: super::info::SystemMemoryInfo {
+            total_physical_bytes: unsupported_u64(),
+            available_physical_bytes: unsupported_u64(),
+            used_physical_bytes: unsupported_u64(),
+            usage_percent: unsupported_f64(),
+            total_page_file_bytes: unsupported_u64(),
+            available_page_file_bytes: unsupported_u64(),
+            total_virtual_bytes: unsupported_u64(),
+            available_virtual_bytes: unsupported_u64(),
+            committed_bytes: unsupported_u64(),
+            commit_limit_bytes: unsupported_u64(),
+            paged_pool_bytes: unsupported_u64(),
+            non_paged_pool_bytes: unsupported_u64(),
+            hardware_reserved_bytes: unsupported_u64(),
+            dimms: Vec::new(),
+            provider_status: provider_status.clone(),
+        },
+        gpus: Vec::new(),
+        disks: vec![super::hardware::RuntimeDiskInfo {
+            id: "disk-fixture".to_string(),
+            drive_letter: unsupported_text(),
+            label: unsupported_text(),
+            file_system: unsupported_text(),
+            total_bytes: unsupported_u64(),
+            available_bytes: unsupported_u64(),
+            used_bytes: unsupported_u64(),
+            usage_percent: unsupported_f64(),
+            active_percent: unsupported_f64(),
+            read_bytes_per_sec: unsupported_u64(),
+            write_bytes_per_sec: unsupported_u64(),
+            queue_length: unsupported_f64(),
+        }],
+        network: Vec::new(),
+        provider_status: vec![provider_status],
+    };
+
+    let json = serde_json::to_string(&performance).expect("HardwarePerformance 应可序列化");
+    assert!(json.contains("\"value\":null"));
+    let decoded: super::hardware::HardwarePerformance =
+        serde_json::from_str(&json).expect("HardwarePerformance 应可反序列化");
+    assert_eq!(decoded, performance);
+    assert_eq!(decoded.disks[0].total_bytes.value, None);
 }

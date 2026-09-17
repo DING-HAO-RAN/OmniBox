@@ -3,7 +3,7 @@
 //! 暴露供前端 Vue 界面调用的系统管理与启动项调度 Commands。
 
 use crate::storage;
-use crate::system::types::{AppSettings, CleanResult, CloakedItem, LaunchItem, MemoryStatus};
+use crate::system::types::{AppSettings, CleanResult, CloakedItem, LaunchItem};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -80,8 +80,8 @@ pub struct BatchLaunchResult {
 ///
 /// 包括物理总内存、可用内存、已用内存及使用百分比。
 #[tauri::command]
-pub fn get_memory_status() -> Result<MemoryStatus, String> {
-    crate::system::get_memory_info()
+pub fn get_memory_status() -> Result<crate::system::info::SystemMemoryInfo, String> {
+    Ok(crate::system::info::collect_memory_info())
 }
 
 /// 执行系统级进程工作集修剪清理
@@ -166,18 +166,26 @@ pub fn save_launcher_config(app: tauri::AppHandle, items: Vec<LaunchItem>) -> Re
 /// 最小化当前主窗口
 #[tauri::command]
 pub fn app_minimize_window(window: tauri::Window) -> Result<(), String> {
-    window.minimize().map_err(|e| format!("最小化窗口失败: {e}"))
+    window
+        .minimize()
+        .map_err(|e| format!("最小化窗口失败: {e}"))
 }
 
 /// 切换当前窗口最大化/还原状态
 #[tauri::command]
 pub fn app_toggle_maximize_window(window: tauri::Window) -> Result<bool, String> {
-    let is_max = window.is_maximized().map_err(|e| format!("获取最大化状态失败: {e}"))?;
+    let is_max = window
+        .is_maximized()
+        .map_err(|e| format!("获取最大化状态失败: {e}"))?;
     if is_max {
-        window.unmaximize().map_err(|e| format!("还原窗口失败: {e}"))?;
+        window
+            .unmaximize()
+            .map_err(|e| format!("还原窗口失败: {e}"))?;
         Ok(false)
     } else {
-        window.maximize().map_err(|e| format!("最大化窗口失败: {e}"))?;
+        window
+            .maximize()
+            .map_err(|e| format!("最大化窗口失败: {e}"))?;
         Ok(true)
     }
 }
@@ -191,7 +199,9 @@ pub fn app_close_window(window: tauri::Window) -> Result<(), String> {
 /// 查询当前窗口是否处于最大化状态
 #[tauri::command]
 pub fn app_is_maximized(window: tauri::Window) -> Result<bool, String> {
-    window.is_maximized().map_err(|e| format!("查询最大化状态失败: {e}"))
+    window
+        .is_maximized()
+        .map_err(|e| format!("查询最大化状态失败: {e}"))
 }
 
 // ==========================================
@@ -255,10 +265,19 @@ pub fn cloak_file_or_dir(
     crate::system::cloaker::cloak_path(trimmed_path)?;
 
     let mut list = storage::load_cloaked_items(&app)?;
-    let id = format!("cloak-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+    let id = format!(
+        "cloak-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
 
     // 如果列表中已存在相同路径，则更新状态，否则新增
-    if let Some(existing) = list.iter_mut().find(|item| item.path.eq_ignore_ascii_case(trimmed_path)) {
+    if let Some(existing) = list
+        .iter_mut()
+        .find(|item| item.path.eq_ignore_ascii_case(trimmed_path))
+    {
         existing.is_cloaked = true;
         if let Some(n) = note {
             existing.note = n;
@@ -273,7 +292,10 @@ pub fn cloak_file_or_dir(
         name,
         path: trimmed_path.to_string(),
         is_dir,
-        added_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+        added_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
         is_cloaked: true,
         note: note.unwrap_or_default(),
     };
@@ -288,7 +310,10 @@ pub fn cloak_file_or_dir(
 #[tauri::command]
 pub fn uncloak_file_or_dir(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let mut list = storage::load_cloaked_items(&app)?;
-    let item = list.iter_mut().find(|i| i.id == id).ok_or_else(|| "未找到指定的隐藏记录".to_string())?;
+    let item = list
+        .iter_mut()
+        .find(|i| i.id == id)
+        .ok_or_else(|| "未找到指定的隐藏记录".to_string())?;
 
     crate::system::cloaker::uncloak_path(&item.path)?;
     item.is_cloaked = false;
@@ -301,7 +326,10 @@ pub fn uncloak_file_or_dir(app: tauri::AppHandle, id: String) -> Result<(), Stri
 #[tauri::command]
 pub fn recloak_file_or_dir(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let mut list = storage::load_cloaked_items(&app)?;
-    let item = list.iter_mut().find(|i| i.id == id).ok_or_else(|| "未找到指定的记录".to_string())?;
+    let item = list
+        .iter_mut()
+        .find(|i| i.id == id)
+        .ok_or_else(|| "未找到指定的记录".to_string())?;
 
     crate::system::cloaker::cloak_path(&item.path)?;
     item.is_cloaked = true;
@@ -347,21 +375,35 @@ pub fn send_cloaked_to_launcher(
     silent: bool,
 ) -> Result<LaunchItem, String> {
     let list = storage::load_cloaked_items(&app)?;
-    let cloaked = list.iter().find(|i| i.id == id).ok_or_else(|| "未找到指定隐藏项".to_string())?;
+    let cloaked = list
+        .iter()
+        .find(|i| i.id == id)
+        .ok_or_else(|| "未找到指定隐藏项".to_string())?;
 
     let mut launchers = storage::load_launcher_items(&app)?;
 
     // 检查是否已有相同路径
-    if let Some(existing) = launchers.iter().find(|l| l.path.eq_ignore_ascii_case(&cloaked.path)) {
+    if let Some(existing) = launchers
+        .iter()
+        .find(|l| l.path.eq_ignore_ascii_case(&cloaked.path))
+    {
         return Ok(existing.clone());
     }
 
     let new_launch = LaunchItem {
-        id: format!("launch-from-cloak-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()),
+        id: format!(
+            "launch-from-cloak-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ),
         name: format!("🔒 {}", cloaked.name),
         path: cloaked.path.clone(),
         args: "".to_string(),
-        work_dir: Path::new(&cloaked.path).parent().map(|p| p.to_string_lossy().into_owned()),
+        work_dir: Path::new(&cloaked.path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned()),
         silent,
         enabled: true,
     };
@@ -392,7 +434,7 @@ pub fn choose_any_file() -> Result<Option<String>, String> {
 /// 获取系统硬件配置及当前实时性能快照 (CPU/GPU/内存/磁盘/网络)
 #[tauri::command]
 pub fn get_performance_snapshot() -> Result<crate::system::HardwarePerformance, String> {
-    crate::system::get_hardware_performance()
+    Ok(crate::system::get_hardware_performance())
 }
 
 /// 采集全量多维度系统与硬件诊断报告 (覆盖整机/主板/CPU/多显卡/物理DIMM/NVMe/网络/显示音频外设/进程/安全)
@@ -678,8 +720,15 @@ mod tests {
         let res = get_memory_status();
         assert!(res.is_ok(), "获取内存状态命令应成功执行");
         let status = res.unwrap();
-        assert!(status.total_ram > 0, "总内存应大于 0");
-        assert!(status.usage_percent >= 0.0 && status.usage_percent <= 100.0);
+        assert!(
+            status.total_physical_bytes.value.is_some()
+                || status.total_physical_bytes.quality != crate::system::info::MetricQuality::Good
+        );
+        assert!(status
+            .usage_percent
+            .value
+            .map(|value| (0.0..=100.0).contains(&value))
+            .unwrap_or(true));
     }
 
     #[test]

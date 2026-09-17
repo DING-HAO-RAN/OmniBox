@@ -228,19 +228,46 @@ export interface GpuDetailedInfo {
 }
 
 /**
+ * 逻辑卷实时性能投影 (对齐 Rust 端 `RuntimeDiskInfo`)
+ */
+export interface RuntimeDiskInfo {
+  id: string;
+  drive_letter: MetricValue<string>;
+  label: MetricValue<string>;
+  file_system: MetricValue<string>;
+  total_bytes: MetricValue<number>;
+  available_bytes: MetricValue<number>;
+  used_bytes: MetricValue<number>;
+  usage_percent: MetricValue<number>;
+  active_percent: MetricValue<number>;
+  read_bytes_per_sec: MetricValue<number>;
+  write_bytes_per_sec: MetricValue<number>;
+  queue_length: MetricValue<number>;
+}
+
+/**
+ * 网络适配器实时吞吐投影 (对齐 Rust 端 `RuntimeNetworkInfo`)
+ */
+export interface RuntimeNetworkInfo {
+  id: string;
+  name: MetricValue<string>;
+  rx_bytes_total: MetricValue<number>;
+  tx_bytes_total: MetricValue<number>;
+  rx_bytes_per_sec: MetricValue<number>;
+  tx_bytes_per_sec: MetricValue<number>;
+}
+
+/**
  * 全局硬件性能快照 (对齐 Rust 端 `HardwarePerformance`)
  */
 export interface HardwarePerformance {
-  cpu_name: string;
-  cpu_logical_cores: number;
-  cpu_usage_percent: number;
-  gpu_name: string;
-  memory: MemoryStatus;
-  disks: DiskInfo[];
-  network: NetworkSpeedInfo;
-  cpu_detail?: CpuDetailedInfo;
-  memory_detail?: MemoryDetailedInfo;
-  gpu_detail?: GpuDetailedInfo;
+  timestamp: number;
+  cpu: CpuRuntimeInfo;
+  memory: SystemMemoryInfo;
+  gpus: GpuDevice[];
+  disks: RuntimeDiskInfo[];
+  network: RuntimeNetworkInfo[];
+  provider_status: CollectionStatus[];
 }
 
 /**
@@ -265,6 +292,15 @@ export interface MetricValue<T> {
   quality: MetricQuality;
   source: string;
   timestamp: number;
+  error?: string | null;
+}
+
+export interface CollectionStatus {
+  quality: MetricQuality;
+  source: string;
+  timestamp: number;
+  item_count?: number | null;
+  truncated: boolean;
   error?: string | null;
 }
 
@@ -386,6 +422,7 @@ export interface SystemMemoryInfo {
   non_paged_pool_bytes: MetricValue<number>;
   hardware_reserved_bytes: MetricValue<number>;
   dimms: DimmModule[];
+  provider_status: CollectionStatus;
 }
 
 export interface NvmeHealthInfo {
@@ -639,6 +676,7 @@ export interface SystemFullReport {
   dev_env: DevEnvironmentSnapshot;
   diagnostics: DiagnosticsSnapshot;
   timestamp: number;
+  provider_status: CollectionStatus[];
 }
 
 /**
