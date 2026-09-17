@@ -7,7 +7,7 @@
 use super::quality::{classify_win32_error, current_timestamp_ms, MetricQuality, MetricValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::mem::size_of;
+use std::mem::{offset_of, size_of};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::ptr;
 use std::sync::Mutex;
@@ -103,7 +103,16 @@ struct AdapterAddressData {
     ipv6_addresses: Vec<String>,
     gateway: String,
     dns_servers: Vec<String>,
-    dhcp_enabled: bool,
+    // 短版本节点可能没有 Flags；None 表示该字段不可用，而不是 DHCP=false。
+    dhcp_enabled: Option<bool>,
+}
+
+#[derive(Default)]
+struct AdapterAddressTable {
+    // 地址数据始终以 GetAdaptersAddresses 报告的真实 LUID 为主键。
+    by_luid: HashMap<u64, AdapterAddressData>,
+    // IfIndex 与 Ipv6IfIndex 仅作为兼容别名，统一指向 LUID。
+    by_index: HashMap<u32, u64>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -120,8 +129,8 @@ enum ParsedIpAddress {
     V6([u8; 16], u32),
 }
 
-// 按 InterfaceIndex 保存相邻两次采样，首次采样明确返回 Unsupported，而不是 0。
-static PREVIOUS_ADAPTER_SAMPLES: Mutex<Option<HashMap<u32, (Instant, u64, u64)>>> =
+// 按稳定的 InterfaceLuid 保存相邻两次采样，首次采样明确返回 Unsupported，而不是 0。
+static PREVIOUS_ADAPTER_SAMPLES: Mutex<Option<HashMap<u64, (Instant, u64, u64)>>> =
     Mutex::new(None);
 
 fn missing_metric_at<T>(
@@ -167,7 +176,42 @@ fn safe_mac_bytes(bytes: &[u8], reported_len: usize) -> &[u8] {
     &bytes[..reported_len.min(bytes.len())]
 }
 
-/// 计算两个累计计数器之间的速率；首次采样、回退、非法时间和浮点溢出均无值。
+/// 用精确的二进制有理数计算 `delta / elapsed_seconds` 的向下取整值。
+fn exact_rate_for_elapsed(delta: u64, elapsed_seconds: f64) -> Option<u64> {
+    let bits = elapsed_seconds.to_bits();
+    let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1u64 << 52) - 1);
+    let (significand, binary_shift) = if exponent_bits == 0 {
+        // 子正常数都小于 1 秒，调用方会在此之前保守拒绝。
+        (fraction, -1074)
+    } else {
+        (fraction | (1u64 << 52), exponent_bits - 1023 - 52)
+    };
+    if significand == 0 {
+        return Some(0);
+    }
+
+    if binary_shift >= 0 {
+        // elapsed = significand * 2^binary_shift；分母大于 delta 时速率就是 0。
+        let Some(denominator) = u128::from(significand).checked_shl(binary_shift as u32) else {
+            return Some(0);
+        };
+        if denominator > u128::from(delta) {
+            return Some(0);
+        }
+        return u64::try_from(u128::from(delta) / denominator).ok();
+    }
+
+    // elapsed = significand / 2^shift；用 u128 保持 delta 左移的精确性。
+    let left_shift = u32::try_from(-binary_shift).ok()?;
+    let quotient = delta / significand;
+    let remainder = delta % significand;
+    let high = quotient.checked_shl(left_shift)?;
+    let low = (u128::from(remainder) << left_shift) / u128::from(significand);
+    high.checked_add(u64::try_from(low).ok()?)
+}
+
+/// 计算两个累计计数器之间的速率；首次采样、回退、非法时间和无法安全表示的速率均无值。
 pub(crate) fn calculate_rate(
     previous_total: Option<u64>,
     current_total: u64,
@@ -178,17 +222,12 @@ pub(crate) fn calculate_rate(
         return None;
     }
 
-    let delta = current_total - previous_total;
-    if elapsed_seconds == 1.0 {
-        return Some(delta);
-    }
-
-    let rate = delta as f64 / elapsed_seconds;
-    if !rate.is_finite() || rate < 0.0 || (elapsed_seconds < 1.0 && rate > u64::MAX as f64) {
+    // 小于一秒时允许保守返回 None，避免由浮点边界伪造超出 u64 的速率。
+    if elapsed_seconds < 1.0 {
         return None;
     }
 
-    Some(rate as u64)
+    exact_rate_for_elapsed(current_total - previous_total, elapsed_seconds)
 }
 
 fn unsupported_metric_at<T>(
@@ -230,6 +269,13 @@ fn rate_metric(
 fn read_u32_ne(buffer: &[u8], offset: usize) -> Option<u32> {
     let end = offset.checked_add(size_of::<u32>())?;
     Some(u32::from_ne_bytes(
+        buffer.get(offset..end)?.try_into().ok()?,
+    ))
+}
+
+fn read_u64_ne(buffer: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(size_of::<u64>())?;
+    Some(u64::from_ne_bytes(
         buffer.get(offset..end)?.try_into().ok()?,
     ))
 }
@@ -568,18 +614,6 @@ fn combine_tcp_counts(first: TcpCounts, second: TcpCounts) -> Result<TcpCounts, 
     })
 }
 
-fn buffer_contains<T>(pointer: *const T, base: *const u8, length: usize) -> bool {
-    let base_address = base as usize;
-    let pointer_address = pointer as usize;
-    let Some(buffer_end) = base_address.checked_add(length) else {
-        return false;
-    };
-    let Some(pointer_end) = pointer_address.checked_add(size_of::<T>()) else {
-        return false;
-    };
-    pointer_address >= base_address && pointer_end <= buffer_end
-}
-
 fn buffer_contains_bytes(
     pointer: *const u8,
     length: usize,
@@ -641,115 +675,195 @@ fn push_ip_address(
     }
 }
 
+unsafe fn read_node_field<T: Copy>(node: &[u8], offset: usize) -> Option<T> {
+    let end = offset.checked_add(size_of::<T>())?;
+    let bytes = node.get(offset..end)?;
+    Some(ptr::read_unaligned(bytes.as_ptr() as *const T))
+}
+
+unsafe fn declared_node<'a>(
+    pointer: *const u8,
+    base: *const u8,
+    buffer: &'a [u8],
+) -> Result<&'a [u8], MetricQuality> {
+    // Length 是所有 IP Helper 链节点的共同首字段，先只读取这 4 字节。
+    if !buffer_contains_bytes(pointer, size_of::<u32>(), base, buffer.len()) {
+        return Err(MetricQuality::Invalid);
+    }
+    let length = ptr::read_unaligned(pointer as *const u32) as usize;
+    if length < size_of::<u32>() || !buffer_contains_bytes(pointer, length, base, buffer.len()) {
+        return Err(MetricQuality::Invalid);
+    }
+
+    let offset = (pointer as usize)
+        .checked_sub(base as usize)
+        .ok_or(MetricQuality::Invalid)?;
+    let end = offset.checked_add(length).ok_or(MetricQuality::Invalid)?;
+    buffer.get(offset..end).ok_or(MetricQuality::Invalid)
+}
+
+unsafe fn parse_socket_address_chain<T>(
+    first: *mut T,
+    base: *const u8,
+    buffer: &[u8],
+    next_offset: usize,
+    address_offset: usize,
+    mut on_address: impl FnMut(ParsedIpAddress),
+) -> Result<(), MetricQuality> {
+    let mut current = first;
+    let mut visited = HashSet::new();
+    let max_nodes = buffer.len() / size_of::<u32>() + 1;
+
+    while !current.is_null() {
+        if !visited.insert(current as usize) || visited.len() > max_nodes {
+            return Err(MetricQuality::Invalid);
+        }
+        let node = declared_node(current as *const u8, base, buffer)?;
+        if let Some(address) = read_node_field::<SOCKET_ADDRESS>(node, address_offset) {
+            if let Some(address) = socket_address_to_ip(address, base, buffer.len()) {
+                on_address(address);
+            }
+        }
+
+        // 旧版本节点可能没有 Next；此时只安全解析当前节点并停止链遍历。
+        let Some(next) = read_node_field::<*mut T>(node, next_offset) else {
+            break;
+        };
+        current = next;
+    }
+
+    Ok(())
+}
+
+fn merge_adapter_address_data(target: &mut AdapterAddressData, mut source: AdapterAddressData) {
+    target.ipv4_addresses.append(&mut source.ipv4_addresses);
+    target.ipv6_addresses.append(&mut source.ipv6_addresses);
+    if target.gateway.is_empty() {
+        target.gateway = source.gateway;
+    }
+    target.dns_servers.append(&mut source.dns_servers);
+    if source.dhcp_enabled.is_some() {
+        target.dhcp_enabled = source.dhcp_enabled;
+    }
+}
+
 unsafe fn parse_adapter_addresses_buffer(
     buffer: &[u8],
-) -> Result<HashMap<u32, AdapterAddressData>, MetricQuality> {
+) -> Result<AdapterAddressTable, MetricQuality> {
     if buffer.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(AdapterAddressTable::default());
     }
 
     let base = buffer.as_ptr();
-    let mut current = base as *mut IP_ADAPTER_ADDRESSES_LH;
+    let mut current = base;
     let mut visited_adapters = HashSet::new();
-    let max_adapters = buffer.len() / size_of::<IP_ADAPTER_ADDRESSES_LH>() + 1;
-    let mut result = HashMap::new();
+    let max_adapters = buffer.len() / size_of::<u32>() + 1;
+    let mut result = AdapterAddressTable::default();
 
     while !current.is_null() {
-        if !buffer_contains(current, base, buffer.len())
-            || !visited_adapters.insert(current as usize)
-            || visited_adapters.len() > max_adapters
-        {
+        if !visited_adapters.insert(current as usize) || visited_adapters.len() > max_adapters {
+            return Err(MetricQuality::Invalid);
+        }
+        let adapter = declared_node(current, base, buffer)?;
+
+        // LUID 是跨 IPv4/IPv6 和索引变化的稳定身份，缺失时不能安全回填到 MIB_IF_ROW2。
+        let luid = read_u64_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Luid))
+            .ok_or(MetricQuality::Invalid)?;
+        if luid == 0 {
             return Err(MetricQuality::Invalid);
         }
 
-        let adapter = ptr::read_unaligned(current);
-        let adapter_length = adapter.Anonymous1.Anonymous.Length as usize;
-        if adapter_length < size_of::<IP_ADAPTER_ADDRESSES_LH>()
-            || !buffer_contains_bytes(current as *const u8, adapter_length, base, buffer.len())
-        {
-            return Err(MetricQuality::Invalid);
-        }
-        let interface_index = adapter.Anonymous1.Anonymous.IfIndex;
-        let key = if interface_index != 0 {
-            interface_index
-        } else {
-            adapter.Ipv6IfIndex
-        };
+        let if_index = read_u32_ne(adapter, size_of::<u32>());
+        let ipv6_if_index = read_u32_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Ipv6IfIndex));
+        let dhcp_enabled = read_u32_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Anonymous2))
+            .map(|flags| (flags & IP_ADAPTER_DHCP_ENABLED) != 0);
         let mut data = AdapterAddressData {
-            dhcp_enabled: (adapter.Anonymous2.Flags & IP_ADAPTER_DHCP_ENABLED) != 0,
+            dhcp_enabled,
             ..AdapterAddressData::default()
         };
 
-        let mut unicast = adapter.FirstUnicastAddress;
-        let mut visited_unicast = HashSet::new();
-        let max_unicast = buffer.len() / size_of::<IP_ADAPTER_UNICAST_ADDRESS_LH>() + 1;
-        while !unicast.is_null() {
-            if !buffer_contains(unicast, base, buffer.len())
-                || !visited_unicast.insert(unicast as usize)
-                || visited_unicast.len() > max_unicast
-            {
-                return Err(MetricQuality::Invalid);
-            }
-            let entry = ptr::read_unaligned(unicast);
-            if let Some(address) = socket_address_to_ip(entry.Address, base, buffer.len()) {
-                push_ip_address(address, &mut data.ipv4_addresses, &mut data.ipv6_addresses);
-            }
-            unicast = entry.Next;
+        if let Some(first) = read_node_field::<*mut IP_ADAPTER_UNICAST_ADDRESS_LH>(
+            adapter,
+            offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstUnicastAddress),
+        ) {
+            parse_socket_address_chain(
+                first,
+                base,
+                buffer,
+                offset_of!(IP_ADAPTER_UNICAST_ADDRESS_LH, Next),
+                offset_of!(IP_ADAPTER_UNICAST_ADDRESS_LH, Address),
+                |address| {
+                    push_ip_address(address, &mut data.ipv4_addresses, &mut data.ipv6_addresses);
+                },
+            )?;
         }
 
-        let mut gateway = adapter.FirstGatewayAddress;
-        let mut visited_gateways = HashSet::new();
-        let max_gateways = buffer.len() / size_of::<IP_ADAPTER_GATEWAY_ADDRESS_LH>() + 1;
-        while !gateway.is_null() {
-            if !buffer_contains(gateway, base, buffer.len())
-                || !visited_gateways.insert(gateway as usize)
-                || visited_gateways.len() > max_gateways
-            {
-                return Err(MetricQuality::Invalid);
-            }
-            let entry = ptr::read_unaligned(gateway);
-            if data.gateway.is_empty() {
-                if let Some(address) = socket_address_to_ip(entry.Address, base, buffer.len()) {
-                    data.gateway = match address {
+        if let Some(first) = read_node_field::<*mut IP_ADAPTER_GATEWAY_ADDRESS_LH>(
+            adapter,
+            offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstGatewayAddress),
+        ) {
+            parse_socket_address_chain(
+                first,
+                base,
+                buffer,
+                offset_of!(IP_ADAPTER_GATEWAY_ADDRESS_LH, Next),
+                offset_of!(IP_ADAPTER_GATEWAY_ADDRESS_LH, Address),
+                |address| {
+                    if data.gateway.is_empty() {
+                        data.gateway = match address {
+                            ParsedIpAddress::V4(bytes) => Ipv4Addr::from(bytes).to_string(),
+                            ParsedIpAddress::V6(bytes, scope_id) => {
+                                format_ipv6_address(bytes, scope_id)
+                            }
+                        };
+                    }
+                },
+            )?;
+        }
+
+        if let Some(first) = read_node_field::<*mut IP_ADAPTER_DNS_SERVER_ADDRESS_XP>(
+            adapter,
+            offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstDnsServerAddress),
+        ) {
+            parse_socket_address_chain(
+                first,
+                base,
+                buffer,
+                offset_of!(IP_ADAPTER_DNS_SERVER_ADDRESS_XP, Next),
+                offset_of!(IP_ADAPTER_DNS_SERVER_ADDRESS_XP, Address),
+                |address| {
+                    let value = match address {
                         ParsedIpAddress::V4(bytes) => Ipv4Addr::from(bytes).to_string(),
                         ParsedIpAddress::V6(bytes, scope_id) => {
                             format_ipv6_address(bytes, scope_id)
                         }
                     };
-                }
-            }
-            gateway = entry.Next;
+                    data.dns_servers.push(value);
+                },
+            )?;
         }
 
-        let mut dns = adapter.FirstDnsServerAddress;
-        let mut visited_dns = HashSet::new();
-        let max_dns = buffer.len() / size_of::<IP_ADAPTER_DNS_SERVER_ADDRESS_XP>() + 1;
-        while !dns.is_null() {
-            if !buffer_contains(dns, base, buffer.len())
-                || !visited_dns.insert(dns as usize)
-                || visited_dns.len() > max_dns
-            {
-                return Err(MetricQuality::Invalid);
+        let next = read_node_field::<*mut IP_ADAPTER_ADDRESSES_LH>(
+            adapter,
+            offset_of!(IP_ADAPTER_ADDRESSES_LH, Next),
+        );
+        let entry = result.by_luid.entry(luid).or_default();
+        merge_adapter_address_data(entry, data);
+        for index in [if_index, ipv6_if_index].into_iter().flatten() {
+            if index != 0 {
+                result.by_index.insert(index, luid);
             }
-            let entry = ptr::read_unaligned(dns);
-            if let Some(address) = socket_address_to_ip(entry.Address, base, buffer.len()) {
-                let value = match address {
-                    ParsedIpAddress::V4(bytes) => Ipv4Addr::from(bytes).to_string(),
-                    ParsedIpAddress::V6(bytes, scope_id) => format_ipv6_address(bytes, scope_id),
-                };
-                data.dns_servers.push(value);
-            }
-            dns = entry.Next;
         }
 
-        result.insert(key, data);
-        current = adapter.Next;
+        // 旧版本节点没有 Next 时，当前数据仍可用，但不能继续假读后续字段。
+        let Some(next) = next else { break };
+        current = next as *const u8;
     }
 
     Ok(result)
 }
 
-fn query_adapters_addresses() -> Result<HashMap<u32, AdapterAddressData>, MetricQuality> {
+fn query_adapters_addresses() -> Result<AdapterAddressTable, MetricQuality> {
     let mut required_size = 0u32;
     let initial_result = unsafe {
         GetAdaptersAddresses(
@@ -769,7 +883,7 @@ fn query_adapters_addresses() -> Result<HashMap<u32, AdapterAddressData>, Metric
     }
     if required_size == 0 {
         return (initial_result == ERROR_SUCCESS)
-            .then(HashMap::new)
+            .then(AdapterAddressTable::default)
             .ok_or_else(|| classify_win32_error(initial_result));
     }
     if required_size as usize > MAX_ADAPTER_ADDRESSES_BUFFER {
@@ -831,8 +945,13 @@ fn format_oper_status(status: i32) -> String {
     }
 }
 
+unsafe fn interface_luid_value(row: &MIB_IF_ROW2) -> u64 {
+    // NET_LUID_LH 的 Value 是稳定的 64 位接口身份，不受 IfIndex 重分配影响。
+    row.InterfaceLuid.Value
+}
+
 fn update_adapter_rates(
-    interface_index: u32,
+    interface_luid: u64,
     total_rx: u64,
     total_tx: u64,
     sample_time: Instant,
@@ -842,7 +961,7 @@ fn update_adapter_rates(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let samples = guard.get_or_insert_with(HashMap::new);
-    let previous = samples.insert(interface_index, (sample_time, total_rx, total_tx));
+    let previous = samples.insert(interface_luid, (sample_time, total_rx, total_tx));
     let (previous_rx, previous_tx, elapsed) = match previous {
         Some((previous_time, previous_rx, previous_tx)) => (
             Some(previous_rx),
@@ -908,20 +1027,28 @@ fn collect_network_adapters_at(timestamp: u64) -> Vec<NetworkAdapterInfo> {
                 .trim()
                 .to_string();
             let interface_index = row.InterfaceIndex;
+            let interface_luid = interface_luid_value(row);
             let (ipv4_addresses, ipv6_addresses, gateway, dns_servers, dhcp_enabled) =
                 match address_data.as_ref() {
-                    Ok(data) => match data.get(&interface_index) {
+                    Ok(data) => match data.by_luid.get(&interface_luid) {
                         Some(data) => (
                             data.ipv4_addresses.clone(),
                             data.ipv6_addresses.clone(),
                             data.gateway.clone(),
                             data.dns_servers.clone(),
-                            MetricValue::good_at(
-                                data.dhcp_enabled,
-                                "",
-                                IP_HELPER_SOURCE,
-                                timestamp,
-                            ),
+                            data.dhcp_enabled
+                                .map(|enabled| {
+                                    MetricValue::good_at(enabled, "", IP_HELPER_SOURCE, timestamp)
+                                })
+                                .unwrap_or_else(|| {
+                                    missing_metric_at(
+                                        "",
+                                        IP_HELPER_SOURCE,
+                                        MetricQuality::Unsupported,
+                                        "地址节点未包含 DHCP Flags，DHCP 状态不可用",
+                                        timestamp,
+                                    )
+                                }),
                         ),
                         None => (
                             Vec::new(),
@@ -952,7 +1079,7 @@ fn collect_network_adapters_at(timestamp: u64) -> Vec<NetworkAdapterInfo> {
                     ),
                 };
             let (rx_speed_bps, tx_speed_bps) = update_adapter_rates(
-                interface_index,
+                interface_luid,
                 row.InOctets,
                 row.OutOctets,
                 sample_time,
@@ -1134,10 +1261,179 @@ pub fn collect_network_snapshot() -> NetworkSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem::{offset_of, size_of};
+    use std::time::Duration;
+
+    fn put_u32(buffer: &mut [u8], offset: usize, value: u32) {
+        buffer[offset..offset + size_of::<u32>()].copy_from_slice(&value.to_ne_bytes());
+    }
+
+    fn put_u64(buffer: &mut [u8], offset: usize, value: u64) {
+        buffer[offset..offset + size_of::<u64>()].copy_from_slice(&value.to_ne_bytes());
+    }
+
+    unsafe fn put_pointer<T>(buffer: &mut [u8], offset: usize, target_offset: usize) {
+        let pointer = if target_offset == usize::MAX {
+            std::ptr::null_mut()
+        } else {
+            buffer.as_mut_ptr().add(target_offset) as *mut T
+        };
+        std::ptr::write_unaligned(buffer.as_mut_ptr().add(offset) as *mut *mut T, pointer);
+    }
+
+    fn adapter_buffer(luid: u64, if_index: u32, ipv6_if_index: u32) -> Vec<u8> {
+        let mut buffer = vec![0u8; size_of::<IP_ADAPTER_ADDRESSES_LH>()];
+        put_u32(&mut buffer, 0, size_of::<IP_ADAPTER_ADDRESSES_LH>() as u32);
+        put_u32(&mut buffer, size_of::<u32>(), if_index);
+        put_u32(
+            &mut buffer,
+            offset_of!(IP_ADAPTER_ADDRESSES_LH, Ipv6IfIndex),
+            ipv6_if_index,
+        );
+        put_u64(&mut buffer, offset_of!(IP_ADAPTER_ADDRESSES_LH, Luid), luid);
+        buffer
+    }
 
     #[test]
     fn counter_reset_produces_no_network_rate() {
         assert_eq!(calculate_rate(Some(500), 100, 1.0), None);
+    }
+
+    #[test]
+    fn subsecond_rate_does_not_round_overflow_to_u64_max() {
+        assert_eq!(calculate_rate(Some(0), 1u64 << 63, 0.5), None);
+    }
+
+    #[test]
+    fn rate_floor_does_not_round_u64_max_upward() {
+        assert_eq!(calculate_rate(Some(0), u64::MAX, 2.0), Some(u64::MAX / 2));
+    }
+
+    #[test]
+    fn adapter_addresses_are_keyed_by_luid_and_alias_both_indices() {
+        let luid = 0x1_0000_0007u64;
+        let if_index = 7;
+        let ipv6_if_index = 7007;
+        let buffer = adapter_buffer(luid, if_index, ipv6_if_index);
+
+        let table = unsafe { parse_adapter_addresses_buffer(&buffer) }.unwrap();
+        assert!(table.by_luid.contains_key(&luid));
+        assert_eq!(table.by_index.get(&if_index), Some(&luid));
+        assert_eq!(table.by_index.get(&ipv6_if_index), Some(&luid));
+    }
+
+    #[test]
+    fn short_adapter_version_is_read_without_full_struct_load() {
+        let luid = 0x2_0000_0007u64;
+        let mut buffer = adapter_buffer(luid, 7, 7007);
+        let short_length = offset_of!(IP_ADAPTER_ADDRESSES_LH, Luid) + size_of::<u64>();
+        put_u32(&mut buffer, 0, short_length as u32);
+
+        let table = unsafe { parse_adapter_addresses_buffer(&buffer) }.unwrap();
+        assert!(table.by_luid.contains_key(&luid));
+    }
+
+    #[test]
+    fn short_unicast_gateway_and_dns_nodes_are_parsed_field_by_field() {
+        let luid = 0x3_0000_0007u64;
+        let mut buffer = adapter_buffer(luid, 7, 7007);
+        let node_specs = [
+            (
+                offset_of!(IP_ADAPTER_UNICAST_ADDRESS_LH, Address),
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstUnicastAddress),
+                [192, 0, 2, 1],
+            ),
+            (
+                offset_of!(IP_ADAPTER_GATEWAY_ADDRESS_LH, Address),
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstGatewayAddress),
+                [192, 0, 2, 2],
+            ),
+            (
+                offset_of!(IP_ADAPTER_DNS_SERVER_ADDRESS_XP, Address),
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstDnsServerAddress),
+                [192, 0, 2, 3],
+            ),
+        ];
+        let mut node_offsets = [0usize; 3];
+        let mut sockaddr_offsets = [0usize; 3];
+
+        for (index, (address_offset, _, _)) in node_specs.iter().enumerate() {
+            let node_offset = buffer.len();
+            let node_length = address_offset + size_of::<SOCKET_ADDRESS>();
+            let sockaddr_offset = node_offset + node_length;
+            buffer.resize(sockaddr_offset + 8, 0);
+            put_u32(&mut buffer, node_offset, node_length as u32);
+            sockaddr_offsets[index] = sockaddr_offset;
+            node_offsets[index] = node_offset;
+        }
+
+        for (index, (address_offset, _, _)) in node_specs.iter().enumerate() {
+            let node_offset = node_offsets[index];
+            let sockaddr_offset = sockaddr_offsets[index];
+            unsafe {
+                let socket_address = SOCKET_ADDRESS {
+                    lpSockaddr: buffer.as_mut_ptr().add(sockaddr_offset) as *mut _,
+                    iSockaddrLength: 8,
+                };
+                std::ptr::write_unaligned(
+                    buffer.as_mut_ptr().add(node_offset + address_offset) as *mut SOCKET_ADDRESS,
+                    socket_address,
+                );
+            }
+        }
+
+        unsafe {
+            put_pointer::<IP_ADAPTER_UNICAST_ADDRESS_LH>(
+                &mut buffer,
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstUnicastAddress),
+                node_offsets[0],
+            );
+            put_pointer::<IP_ADAPTER_GATEWAY_ADDRESS_LH>(
+                &mut buffer,
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstGatewayAddress),
+                node_offsets[1],
+            );
+            put_pointer::<IP_ADAPTER_DNS_SERVER_ADDRESS_XP>(
+                &mut buffer,
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstDnsServerAddress),
+                node_offsets[2],
+            );
+        }
+
+        for (index, octets) in node_specs.iter().map(|(_, _, octets)| octets).enumerate() {
+            let sockaddr_offset = sockaddr_offsets[index];
+            buffer[sockaddr_offset..sockaddr_offset + 2]
+                .copy_from_slice(&(AF_INET as u16).to_ne_bytes());
+            buffer[sockaddr_offset + 4..sockaddr_offset + 8].copy_from_slice(octets);
+        }
+
+        let table = unsafe { parse_adapter_addresses_buffer(&buffer) }.unwrap();
+        let data = table.by_luid.get(&luid).unwrap();
+        assert_eq!(data.ipv4_addresses, vec!["192.0.2.1"]);
+        assert_eq!(data.gateway, "192.0.2.2");
+        assert_eq!(data.dns_servers, vec!["192.0.2.3"]);
+    }
+
+    #[test]
+    fn interface_identity_change_does_not_reuse_previous_rate_sample() {
+        const FIRST_LUID: u64 = 0x1_0000_0001;
+        const SECOND_LUID: u64 = 0x2_0000_0001;
+        let start = Instant::now();
+        PREVIOUS_ADAPTER_SAMPLES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .clear();
+
+        let first = update_adapter_rates(FIRST_LUID, 100, 200, start, 1);
+        let changed =
+            update_adapter_rates(SECOND_LUID, 110, 210, start + Duration::from_secs(1), 2);
+        let same_identity =
+            update_adapter_rates(FIRST_LUID, 150, 250, start + Duration::from_secs(2), 3);
+
+        assert_eq!(first.0.quality, MetricQuality::Unsupported);
+        assert_eq!(changed.0.quality, MetricQuality::Unsupported);
+        assert_eq!(same_identity.0.quality, MetricQuality::Good);
     }
 
     #[test]
