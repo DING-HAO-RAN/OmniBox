@@ -327,10 +327,12 @@ pub fn get_hardware_performance() -> HardwarePerformance {
 
     let mut network_status = network.status;
     network_status = status_count(network_status, network.value.adapters.len());
-    network_status.error = Some(
-        "现有 NetworkAdapterInfo 未暴露 LUID，运行时 ID 使用真实 index+description 哈希"
-            .to_string(),
-    );
+    if network_status.error.is_none() {
+        network_status.error = Some(
+            "现有 NetworkAdapterInfo 未暴露 LUID，运行时 ID 使用真实 index+description 哈希"
+                .to_string(),
+        );
+    }
     let mut provider_status = vec![
         cpu.status,
         memory.status,

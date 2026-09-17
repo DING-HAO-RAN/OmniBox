@@ -88,14 +88,8 @@ where
     }
 }
 
-fn panic_reason(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        return format!("Provider panic: {message}");
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return format!("Provider panic: {message}");
-    }
-    "Provider panic: unknown payload".to_string()
+fn panic_reason(_payload: Box<dyn std::any::Any + Send>) -> String {
+    "Provider panic; safe fallback returned".to_string()
 }
 
 fn empty_metric<T>(source: &str, timestamp: u64) -> MetricValue<T> {

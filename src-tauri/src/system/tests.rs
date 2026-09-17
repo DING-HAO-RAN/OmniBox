@@ -324,12 +324,16 @@ fn rich_snapshot_serializes_null_quality_and_collection_status() {
 #[test]
 fn rich_performance_contract_round_trips_unsupported_metrics_and_status() {
     let timestamp = 1000;
-    let unsupported_u64 =
-        || super::info::MetricValue::unsupported_at("Bytes", "fixture", "missing", timestamp);
+    let unsupported_u64 = || {
+        super::info::MetricValue::<u64>::unsupported_at("Bytes", "fixture", "missing", timestamp)
+    };
+    let unsupported_frequency = || -> super::info::MetricValue<u32> {
+        super::info::MetricValue::unsupported_at("MHz", "fixture", "missing", timestamp)
+    };
     let unsupported_f64 =
-        || super::info::MetricValue::unsupported_at("%", "fixture", "missing", timestamp);
+        || super::info::MetricValue::<f64>::unsupported_at("%", "fixture", "missing", timestamp);
     let unsupported_text =
-        || super::info::MetricValue::unsupported_at("", "fixture", "missing", timestamp);
+        || super::info::MetricValue::<String>::unsupported_at("", "fixture", "missing", timestamp);
     let provider_status = super::info::CollectionStatus {
         quality: super::info::MetricQuality::Unsupported,
         source: "fixture".to_string(),
@@ -348,8 +352,8 @@ fn rich_performance_contract_round_trips_unsupported_metrics_and_status() {
             user_usage_percent: unsupported_f64(),
             kernel_usage_percent: unsupported_f64(),
             idle_percent: unsupported_f64(),
-            base_frequency_mhz: unsupported_u64(),
-            current_frequency_mhz: unsupported_u64(),
+            base_frequency_mhz: unsupported_frequency(),
+            current_frequency_mhz: unsupported_frequency(),
             package_temperature_c: unsupported_f64(),
             package_power_watts: unsupported_f64(),
         },
@@ -395,4 +399,21 @@ fn rich_performance_contract_round_trips_unsupported_metrics_and_status() {
         serde_json::from_str(&json).expect("HardwarePerformance 应可反序列化");
     assert_eq!(decoded, performance);
     assert_eq!(decoded.disks[0].total_bytes.value, None);
+    assert_eq!(decoded.cpu.base_frequency_mhz.value, None);
+}
+
+#[test]
+fn provider_panic_payload_is_not_exposed_in_status_or_json() {
+    let secret_payload = "malicious panic payload";
+    let result = super::info::collect_isolated("panic-fixture", (), || {
+        panic!("{}", secret_payload);
+    });
+
+    assert_eq!(result.status.quality, super::info::MetricQuality::ReadError);
+    assert_eq!(
+        result.status.error.as_deref(),
+        Some("Provider panic; safe fallback returned")
+    );
+    let json = serde_json::to_string(&result.status).expect("panic status 应可序列化");
+    assert!(!json.contains(secret_payload));
 }
