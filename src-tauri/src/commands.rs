@@ -700,35 +700,156 @@ fn choose_file_path(mode: FileDialogMode) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::path::Path;
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, SYNCHRONIZE};
 
-    /// 辅助测试清理进程，避免残留
-    fn kill_process_by_pid(pid: u32) {
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !handle.is_null() {
-                TerminateProcess(handle, 0);
-                CloseHandle(handle);
+    fn assert_metric_is_well_formed<T>(metric: &crate::system::info::MetricValue<T>) {
+        assert!(!metric.source.trim().is_empty(), "指标 source 不能为空");
+        assert!(metric.timestamp > 0, "指标 timestamp 必须为正数");
+        assert!(!metric.unit.contains('\0'), "指标 unit 不得包含 NUL 字符");
+        match metric.quality {
+            crate::system::info::MetricQuality::Good
+            | crate::system::info::MetricQuality::Estimated => {
+                assert!(metric.value.is_some(), "成功指标必须携带 value");
             }
+            _ => {
+                assert!(metric.value.is_none(), "非成功指标必须保持 value 为 null");
+                assert!(
+                    metric
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| !error.trim().is_empty()),
+                    "失败指标必须包含 error"
+                );
+            }
+        }
+    }
+
+    fn assert_collection_status_is_well_formed(status: &crate::system::info::CollectionStatus) {
+        assert!(!status.source.trim().is_empty(), "集合 source 不能为空");
+        assert!(status.timestamp > 0, "集合 timestamp 必须为正数");
+        if !matches!(
+            status.quality,
+            crate::system::info::MetricQuality::Good
+                | crate::system::info::MetricQuality::Estimated
+        ) {
+            assert_eq!(
+                status.item_count.unwrap_or(0),
+                0,
+                "失败集合不得报告有效条目"
+            );
+            assert!(
+                status
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| !error.trim().is_empty()),
+                "失败集合必须包含 error"
+            );
+        }
+    }
+
+    fn assert_serialized_metrics(value: &Value) {
+        match value {
+            Value::Object(object) => {
+                let is_metric = ["value", "unit", "quality", "source", "timestamp"]
+                    .iter()
+                    .all(|key| object.contains_key(*key));
+                if is_metric {
+                    let metric: crate::system::info::MetricValue<Value> =
+                        serde_json::from_value(value.clone()).expect("MetricValue JSON 应合法");
+                    assert_metric_is_well_formed(&metric);
+                    if metric.unit == "%" {
+                        if let Some(percent) = object.get("value").and_then(Value::as_f64) {
+                            assert!((0.0..=100.0).contains(&percent));
+                        }
+                    }
+                } else if [
+                    "quality",
+                    "source",
+                    "timestamp",
+                    "item_count",
+                    "truncated",
+                    "error",
+                ]
+                .iter()
+                .all(|key| object.contains_key(*key))
+                {
+                    let status: crate::system::info::CollectionStatus =
+                        serde_json::from_value(value.clone())
+                            .expect("CollectionStatus JSON 应合法");
+                    assert_collection_status_is_well_formed(&status);
+                }
+                for child in object.values() {
+                    assert_serialized_metrics(child);
+                }
+            }
+            Value::Array(items) => {
+                for child in items {
+                    assert_serialized_metrics(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 等待测试自身启动的子进程自然退出，避免强制终止其它进程。
+    fn wait_for_process_exit(pid: u32) {
+        unsafe {
+            let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+            if handle.is_null() {
+                return;
+            }
+            assert_eq!(
+                WaitForSingleObject(handle, 5_000),
+                0,
+                "子进程未在期限内退出"
+            );
+            CloseHandle(handle);
         }
     }
 
     #[test]
     fn test_get_memory_status_command() {
-        let res = get_memory_status();
-        assert!(res.is_ok(), "获取内存状态命令应成功执行");
-        let status = res.unwrap();
+        let status = get_memory_status().expect("获取内存状态命令应成功执行");
+        for metric in [
+            &status.total_physical_bytes,
+            &status.available_physical_bytes,
+            &status.used_physical_bytes,
+            &status.total_page_file_bytes,
+            &status.available_page_file_bytes,
+            &status.total_virtual_bytes,
+            &status.available_virtual_bytes,
+            &status.committed_bytes,
+            &status.commit_limit_bytes,
+            &status.paged_pool_bytes,
+            &status.non_paged_pool_bytes,
+            &status.hardware_reserved_bytes,
+        ] {
+            assert_metric_is_well_formed(metric);
+        }
+        assert_metric_is_well_formed(&status.usage_percent);
+        assert_collection_status_is_well_formed(&status.provider_status);
+
+        let json = serde_json::to_value(&status).expect("SystemMemoryInfo 应可序列化");
+        assert_serialized_metrics(&json);
+    }
+
+    #[test]
+    fn test_get_performance_snapshot_command() {
+        let snapshot = get_performance_snapshot().expect("获取性能快照命令应成功执行");
+        assert!(snapshot.timestamp > 0, "性能快照 timestamp 必须为正数");
         assert!(
-            status.total_physical_bytes.value.is_some()
-                || status.total_physical_bytes.quality != crate::system::info::MetricQuality::Good
+            !snapshot.provider_status.is_empty(),
+            "性能快照必须包含 Provider 状态"
         );
-        assert!(status
-            .usage_percent
-            .value
-            .map(|value| (0.0..=100.0).contains(&value))
-            .unwrap_or(true));
+        for status in &snapshot.provider_status {
+            assert_collection_status_is_well_formed(status);
+        }
+
+        let json = serde_json::to_value(&snapshot).expect("HardwarePerformance 应可序列化");
+        assert_serialized_metrics(&json);
     }
 
     #[test]
@@ -745,9 +866,9 @@ mod tests {
 
         let result = execute_launch_item(item);
         assert!(result.is_ok(), "执行合法启动项应返回 PID");
-        let pid = result.unwrap();
+        let pid = result.expect("合法启动项应返回 PID");
         assert!(pid > 0);
-        kill_process_by_pid(pid);
+        wait_for_process_exit(pid);
     }
 
     #[test]
@@ -794,7 +915,7 @@ mod tests {
         assert!(results[0].pid.is_some());
         assert!(results[0].error.is_none());
         if let Some(pid) = results[0].pid {
-            kill_process_by_pid(pid);
+            wait_for_process_exit(pid);
         }
 
         // 验证项 2 (未启用)

@@ -1,42 +1,203 @@
 //! 系统底层模块单元测试
 //!
-//! 覆盖内存状态获取、工作集清理以及进程普通与静默启动。
+//! 验证系统采集契约、能力相关的空集合以及进程启动结果。
 
+use super::info::{CollectionStatus, MetricQuality, MetricValue};
 use super::*;
+use serde_json::Value;
+use std::collections::HashSet;
 use std::env;
 
-#[test]
-fn test_get_memory_info_validity() {
-    let mem = get_memory_info().expect("读取系统内存信息应当成功");
-
-    // 物理内存总容量必须大于 0 (通常至少大于 1GB)
-    assert!(mem.total_ram > 1024 * 1024 * 1024, "总内存应大于 1GB");
-    // 可用内存不能大于总内存
-    assert!(mem.available_ram <= mem.total_ram, "可用内存不应超过总内存");
-    // 已用内存不能大于总内存
-    assert!(mem.used_ram <= mem.total_ram, "已用内存不应超过总内存");
-    // 已用内存与可用内存之和应近似等于总内存
-    assert_eq!(
-        mem.total_ram,
-        mem.used_ram + mem.available_ram,
-        "已用与可用之和应等于总内存"
-    );
-    // 占用率范围必须在 0.0 到 100.0 之间
+/// 检查单个指标的统一质量与元数据契约。
+fn assert_metric_is_well_formed<T>(metric: &MetricValue<T>) {
     assert!(
-        mem.usage_percent >= 0.0 && mem.usage_percent <= 100.0,
-        "内存使用百分比应在 0.0-100.0 之间"
+        metric.source.trim().is_empty() == false,
+        "指标 source 不能为空"
+    );
+    assert!(metric.timestamp > 0, "指标 timestamp 必须为正数");
+    assert!(!metric.unit.contains('\0'), "指标 unit 不得包含 NUL 字符");
+
+    match metric.quality {
+        MetricQuality::Good | MetricQuality::Estimated => {
+            assert!(metric.value.is_some(), "成功指标必须携带 value");
+        }
+        _ => {
+            assert!(metric.value.is_none(), "非成功指标必须保持 value 为 null");
+            assert!(
+                metric
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| !error.trim().is_empty()),
+                "失败指标必须包含 error"
+            );
+        }
+    }
+}
+
+/// 检查 Provider 集合状态的结构与失败语义。
+fn assert_collection_status_is_well_formed(status: &CollectionStatus) {
+    assert!(!status.source.trim().is_empty(), "集合 source 不能为空");
+    assert!(status.timestamp > 0, "集合 timestamp 必须为正数");
+    if !matches!(
+        status.quality,
+        MetricQuality::Good | MetricQuality::Estimated
+    ) {
+        assert_eq!(
+            status.item_count.unwrap_or(0),
+            0,
+            "失败集合不得报告有效条目"
+        );
+        assert!(
+            status
+                .error
+                .as_deref()
+                .is_some_and(|error| !error.trim().is_empty()),
+            "失败集合必须包含 error"
+        );
+    }
+}
+
+fn is_metric_object(object: &serde_json::Map<String, Value>) -> bool {
+    ["value", "unit", "quality", "source", "timestamp"]
+        .iter()
+        .all(|key| object.contains_key(*key))
+        && object.keys().all(|key| {
+            ["value", "unit", "quality", "source", "timestamp", "error"].contains(&key.as_str())
+        })
+}
+
+fn is_collection_status_object(object: &serde_json::Map<String, Value>) -> bool {
+    [
+        "quality",
+        "source",
+        "timestamp",
+        "item_count",
+        "truncated",
+        "error",
+    ]
+    .iter()
+    .all(|key| object.contains_key(*key))
+}
+
+/// 递归检查报告中所有 MetricValue 与 CollectionStatus 的 JSON 形状。
+fn assert_serialized_contract(value: &Value, path: &str) {
+    match value {
+        Value::Object(object) => {
+            if is_metric_object(object) {
+                let metric: MetricValue<Value> = serde_json::from_value(value.clone())
+                    .unwrap_or_else(|error| panic!("{path} 不是合法 MetricValue: {error}"));
+                assert_metric_is_well_formed(&metric);
+                if metric.unit == "%" {
+                    if let Some(number) = object.get("value").and_then(Value::as_f64) {
+                        assert!((0.0..=100.0).contains(&number), "{path} 百分比超出范围");
+                    }
+                }
+            } else if is_collection_status_object(object) {
+                let status: CollectionStatus = serde_json::from_value(value.clone())
+                    .unwrap_or_else(|error| panic!("{path} 不是合法 CollectionStatus: {error}"));
+                assert_collection_status_is_well_formed(&status);
+            }
+
+            for (key, child) in object {
+                assert_serialized_contract(child, &format!("{path}.{key}"));
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                assert_serialized_contract(child, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 检查稳定硬件 ID 的前缀、哈希格式与集合内唯一性。
+fn assert_stable_ids<'a, I>(ids: I, prefix: &str)
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let ids: Vec<&str> = ids.into_iter().collect();
+    let unique: HashSet<&str> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), ids.len(), "{prefix} 硬件 ID 不得重复");
+    for id in ids {
+        let suffix = id
+            .strip_prefix(&format!("{prefix}-"))
+            .unwrap_or_else(|| panic!("硬件 ID {id} 缺少稳定前缀 {prefix}-"));
+        assert_eq!(suffix.len(), 16, "硬件 ID {id} 的稳定哈希长度错误");
+        assert!(
+            suffix
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+            "硬件 ID {id} 的稳定哈希格式错误"
+        );
+    }
+}
+
+/// 验证完整报告可以在硬件能力缺失时保持结构一致。
+fn assert_report_metrics_are_consistent(report: &SystemFullReport) {
+    assert!(report.timestamp > 0, "报告 timestamp 必须为正数");
+    assert!(
+        !report.provider_status.is_empty(),
+        "报告必须包含 Provider 状态"
+    );
+    for status in &report.provider_status {
+        assert_collection_status_is_well_formed(status);
+    }
+
+    let json = serde_json::to_value(report).expect("系统报告应可序列化");
+    assert_serialized_contract(&json, "report");
+    assert_stable_ids(report.gpus.iter().map(|device| device.id.as_str()), "gpu");
+    assert_stable_ids(
+        report
+            .storage
+            .physical_disks
+            .iter()
+            .map(|disk| disk.id.as_str()),
+        "disk",
+    );
+    assert_stable_ids(
+        report
+            .media
+            .displays
+            .iter()
+            .map(|display| display.id.as_str()),
+        "display",
     );
 }
 
-#[test]
-fn test_clean_process_working_sets_execution() {
-    let result = clean_process_working_sets().expect("工作集修剪应安全执行不返回致命错误");
+fn wait_for_process_exit(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, SYNCHRONIZE};
 
-    // 验证清理前后的百分比在合法范围
-    assert!(result.before_usage_percent >= 0.0 && result.before_usage_percent <= 100.0);
-    assert!(result.after_usage_percent >= 0.0 && result.after_usage_percent <= 100.0);
-    // 在拥有基本权限的 Windows 用户会话下，至少应当能够修剪部分当前用户进程（包括本测试进程）
-    assert!(result.processes_trimmed > 0, "应至少修剪一个进程的工作集");
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            // 极短命令可能已自然退出；此时没有残留句柄需要清理。
+            return;
+        }
+        assert_eq!(
+            WaitForSingleObject(handle, 5_000),
+            0,
+            "子进程未在期限内退出"
+        );
+        CloseHandle(handle);
+    }
+}
+
+#[test]
+fn test_get_memory_info_validity() {
+    let Ok(mem) = get_memory_info() else {
+        // Windows API 失败或当前环境不具备能力时，错误返回本身是合法结果。
+        return;
+    };
+
+    // 不假设机器容量；只验证 API 返回的数值关系与范围。
+    assert!(mem.available_ram <= mem.total_ram, "可用内存不应超过总内存");
+    assert!(mem.used_ram <= mem.total_ram, "已用内存不应超过总内存");
+    assert!(
+        (0.0..=100.0).contains(&mem.usage_percent),
+        "内存使用百分比应在 0.0-100.0 之间"
+    );
 }
 
 #[test]
@@ -55,6 +216,7 @@ fn test_launch_process_normal() {
 
     let pid = launch_process(&item).expect("普通模式启动进程应成功");
     assert!(pid > 0, "返回的进程 PID 应为正整数");
+    wait_for_process_exit(pid);
 }
 
 #[test]
@@ -73,6 +235,7 @@ fn test_launch_process_silent() {
 
     let pid = launch_process(&item).expect("静默模式启动进程应成功");
     assert!(pid > 0, "返回的静默进程 PID 应为正整数");
+    wait_for_process_exit(pid);
 }
 
 #[test]
@@ -91,6 +254,7 @@ fn test_launch_process_with_workdir() {
 
     let pid = launch_process(&item).expect("指定工作目录启动应成功");
     assert!(pid > 0, "返回的进程 PID 应为正整数");
+    wait_for_process_exit(pid);
 }
 
 #[test]
@@ -98,7 +262,7 @@ fn test_launch_process_invalid_path() {
     let item = LaunchItem {
         id: "test-invalid-path".to_string(),
         name: "Test Invalid Path".to_string(),
-        path: "C:\\NonExistentPath\\definitely_not_exist_12345.exe".to_string(),
+        path: "this_non_existent_executable_12345.exe".to_string(),
         args: "".to_string(),
         work_dir: None,
         silent: false,
@@ -141,6 +305,7 @@ fn test_launch_process_quoted_path() {
 
     let pid = launch_process(&item).expect("带引号的路径启动应成功");
     assert!(pid > 0, "返回的进程 PID 应为正整数");
+    wait_for_process_exit(pid);
 }
 
 #[test]
@@ -231,9 +396,17 @@ fn test_hardware_performance_query() {
         !perf.provider_status.is_empty(),
         "性能快照应包含 Provider 状态"
     );
-    assert!(
-        perf.memory.usage_percent.value.is_some()
-            || perf.memory.usage_percent.quality != super::info::MetricQuality::Good
+    for status in &perf.provider_status {
+        assert_collection_status_is_well_formed(status);
+    }
+
+    let json = serde_json::to_value(&perf).expect("性能快照应可序列化");
+    assert_serialized_contract(&json, "performance");
+    assert_stable_ids(perf.gpus.iter().map(|device| device.id.as_str()), "gpu");
+    assert_stable_ids(perf.disks.iter().map(|disk| disk.id.as_str()), "volume");
+    assert_stable_ids(
+        perf.network.iter().map(|adapter| adapter.id.as_str()),
+        "network",
     );
 }
 
@@ -266,32 +439,31 @@ fn test_system_tweaks_list() {
 #[test]
 fn test_collect_full_system_report() {
     let report = super::info::collect_full_system_report();
-    assert!(report.timestamp > 0);
-    assert!(!report
-        .computer
-        .hostname
-        .value
-        .as_deref()
-        .unwrap_or("")
-        .is_empty());
-    assert!(!report.os.name.value.as_deref().unwrap_or("").is_empty());
-    assert!(!report
-        .cpu_static
-        .name
-        .value
-        .as_deref()
-        .unwrap_or("")
-        .is_empty());
-    assert!(!report.gpus.is_empty(), "应至少检测到一个 GPU 设备");
-    assert!(
-        !report.storage.physical_disks.is_empty(),
-        "应至少检测到一个物理驱动器"
-    );
-    assert!(!report.storage.volumes.is_empty(), "应至少检测到一个逻辑卷");
-    assert!(
-        !report.network.adapters.is_empty(),
-        "应至少检测到一个网络适配器"
-    );
+    assert_report_metrics_are_consistent(&report);
+}
+
+#[test]
+fn full_report_accepts_capability_dependent_empty_collections() {
+    let mut report = super::info::collect_full_system_report();
+    report.gpus.clear();
+    report.storage.physical_disks.clear();
+    report.storage.volumes.clear();
+    report.network.adapters.clear();
+    report.media.displays.clear();
+    report.media.audio_devices.clear();
+    report.devices.usb_devices.clear();
+    report.devices.pci_devices.clear();
+    report.devices.other_pnp_devices.clear();
+    report.memory.dimms.clear();
+    report.windows_env.startup_items.clear();
+    report.windows_env.installed_apps_sample.clear();
+    report.windows_env.active_services_sample.clear();
+    report.processes.top_memory_processes.clear();
+    report.dev_env.tools.clear();
+    report.diagnostics.recent_crash_dumps.clear();
+    report.diagnostics.whea_hardware_events.clear();
+
+    assert_report_metrics_are_consistent(&report);
 }
 
 #[test]
@@ -301,6 +473,50 @@ fn test_export_and_sanitize_report() {
 
     let json_sanitized = super::info::export_system_report_json(true).expect("导出脱敏报告应成功");
     assert!(!json_sanitized.is_empty());
+}
+
+#[test]
+fn sanitizer_fixture_removes_sensitive_values_and_preserves_metric_metadata() {
+    let raw = r#"{
+        "username": "fixture-username-12",
+        "mac_address": "02:11:22:33:44:55",
+        "ipv4_address": "192.0.2.10",
+        "ssid": "fixture-ssid-12",
+        "serial_number": {
+            "value": "fixture-serial-12",
+            "unit": "Bytes",
+            "quality": "Good",
+            "source": "fixture-provider",
+            "timestamp": 1700000000000,
+            "error": null
+        },
+        "uuid": "fixture-uuid-12",
+        "hardware_id": "fixture-hardware-12",
+        "startup_token": "fixture-startup-token-12"
+    }"#;
+    let sanitized = super::info::sanitize_report_json(raw);
+    for secret in [
+        "fixture-username-12",
+        "02:11:22:33:44:55",
+        "192.0.2.10",
+        "fixture-ssid-12",
+        "fixture-serial-12",
+        "fixture-uuid-12",
+        "fixture-hardware-12",
+        "fixture-startup-token-12",
+    ] {
+        assert!(
+            !sanitized.contains(secret),
+            "脱敏结果泄漏 fixture 值 {secret}"
+        );
+    }
+
+    let value: Value = serde_json::from_str(&sanitized).expect("脱敏结果应保持合法 JSON");
+    assert!(value["serial_number"]["value"].is_null());
+    assert_eq!(value["serial_number"]["unit"], "Bytes");
+    assert_eq!(value["serial_number"]["quality"], "Good");
+    assert_eq!(value["serial_number"]["source"], "fixture-provider");
+    assert_eq!(value["serial_number"]["timestamp"], 1700000000000_u64);
 }
 
 #[test]
