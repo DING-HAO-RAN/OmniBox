@@ -41,8 +41,11 @@ pub use network::{
     collect_connections_summary, collect_network_adapters, collect_network_snapshot,
     collect_wifi_status, NetworkAdapterInfo, NetworkSnapshot, WiFiConnectionInfo,
 };
-pub use quality::{current_timestamp_ms, MetricQuality, MetricValue};
 pub use processes::{collect_processes_snapshot, ProcessSnapshot, ProcessSummaryItem};
+pub use quality::{
+    classify_win32_error, current_timestamp_ms, stable_device_id, CollectionStatus,
+    CollectorResult, MetricQuality, MetricValue,
+};
 pub use sanitizer::sanitize_report_json;
 pub use storage::{
     collect_logical_volumes, collect_physical_disks, collect_storage_snapshot, NvmeHealthInfo,
@@ -104,8 +107,8 @@ pub fn collect_full_system_report() -> SystemFullReport {
 /// 导出格式化的 JSON 报告字符串，支持按需脱敏
 pub fn export_system_report_json(sanitize: bool) -> Result<String, String> {
     let report = collect_full_system_report();
-    let json = serde_json::to_string_pretty(&report)
-        .map_err(|e| format!("序列化系统报告失败: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(&report).map_err(|e| format!("序列化系统报告失败: {e}"))?;
 
     if sanitize {
         Ok(sanitize_report_json(&json))
