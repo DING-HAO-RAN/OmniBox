@@ -45,14 +45,14 @@ pub struct NvmeHealthInfo {
     pub data_units_read_tb: MetricValue<f64>,
     /// 累计写入量（十进制 TB）。
     pub data_units_written_tb: MetricValue<f64>,
-    /// 通电时间（小时，完整 128 位计数）。
-    pub power_on_hours: MetricValue<u128>,
-    /// 通电计数（完整 128 位计数）。
-    pub power_cycles: MetricValue<u128>,
-    /// 不安全关机计数（完整 128 位计数）。
-    pub unsafe_shutdowns: MetricValue<u128>,
-    /// 介质与数据完整性错误计数（完整 128 位计数）。
-    pub media_errors: MetricValue<u128>,
+    /// 通电时间（小时）。
+    pub power_on_hours: MetricValue<u64>,
+    /// 通电计数。
+    pub power_cycles: MetricValue<u64>,
+    /// 不安全关机计数。
+    pub unsafe_shutdowns: MetricValue<u64>,
+    /// 介质与数据完整性错误计数。
+    pub media_errors: MetricValue<u64>,
     /// 严重警告状态标志。
     pub critical_warning: MetricValue<u8>,
 }
@@ -83,7 +83,7 @@ const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D1400;
 const IOCTL_DISK_GET_LENGTH_INFO: u32 = 0x0007405C;
 const IOCTL_DISK_GET_DRIVE_GEOMETRY: u32 = 0x00070000;
 const STORAGE_DEVICE_PROPERTY: u32 = 0;
-const STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY: u32 = 49;
+const STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY: u32 = 50;
 const PROPERTY_STANDARD_QUERY: u32 = 0;
 const PROTOCOL_TYPE_NVME: u32 = 0x03;
 const NVME_DATA_TYPE_LOG_PAGE: u32 = 2;
@@ -114,6 +114,7 @@ struct STORAGE_PROTOCOL_SPECIFIC_DATA {
     protocol_data_request_sub_value2: u32,
     protocol_data_request_sub_value3: u32,
     protocol_data_request_sub_value4: u32,
+    reserved: [u32; 3],
 }
 
 #[repr(C)]
@@ -193,8 +194,8 @@ fn parse_descriptor_string(
     }
 
     let start = usize::try_from(offset).map_err(|_| MetricQuality::Invalid)?;
-    // Storage descriptor 的字符串偏移必须落在 descriptor 内，并保持偶数边界对齐。
-    if start < STORAGE_DEVICE_DESCRIPTOR_FIXED_SIZE || start >= valid_len || start % 2 != 0 {
+    // Storage descriptor 的 ANSI 字符串偏移必须落在 descriptor 内。
+    if start < STORAGE_DEVICE_DESCRIPTOR_FIXED_SIZE || start >= valid_len {
         return Err(MetricQuality::Invalid);
     }
 
@@ -202,7 +203,7 @@ fn parse_descriptor_string(
     let end = bytes
         .iter()
         .position(|byte| *byte == 0)
-        .unwrap_or(bytes.len());
+        .ok_or(MetricQuality::Invalid)?;
     let value = String::from_utf8_lossy(&bytes[..end]).trim().to_string();
     if value.is_empty() {
         Ok(None)
@@ -252,7 +253,6 @@ fn parse_storage_descriptor(buf: &[u8]) -> Result<StorageDescriptor, MetricQuali
         || usize::try_from(version).map_err(|_| MetricQuality::Invalid)? > buf.len()
         || descriptor_size < STORAGE_DEVICE_DESCRIPTOR_FIXED_SIZE
         || descriptor_size > buf.len()
-        || descriptor_size % size_of::<u32>() != 0
         || version > u32::try_from(descriptor_size).map_err(|_| MetricQuality::Invalid)?
     {
         return Err(MetricQuality::Invalid);
@@ -357,10 +357,15 @@ fn parse_nvme_health_log(log: &[u8], timestamp: u64) -> Result<NvmeHealthInfo, M
 
     let read_units = read_u128_le(log, 32).ok_or(MetricQuality::Invalid)?;
     let written_units = read_u128_le(log, 48).ok_or(MetricQuality::Invalid)?;
-    let power_cycles = read_u128_le(log, 112).ok_or(MetricQuality::Invalid)?;
-    let power_on_hours = read_u128_le(log, 128).ok_or(MetricQuality::Invalid)?;
-    let unsafe_shutdowns = read_u128_le(log, 144).ok_or(MetricQuality::Invalid)?;
-    let media_errors = read_u128_le(log, 160).ok_or(MetricQuality::Invalid)?;
+    // SMART 字段按 NVMe 规范读取为 128 位，但公开模型只承诺 u64；溢出时拒绝整页。
+    let power_cycles = u64::try_from(read_u128_le(log, 112).ok_or(MetricQuality::Invalid)?)
+        .map_err(|_| MetricQuality::Invalid)?;
+    let power_on_hours = u64::try_from(read_u128_le(log, 128).ok_or(MetricQuality::Invalid)?)
+        .map_err(|_| MetricQuality::Invalid)?;
+    let unsafe_shutdowns = u64::try_from(read_u128_le(log, 144).ok_or(MetricQuality::Invalid)?)
+        .map_err(|_| MetricQuality::Invalid)?;
+    let media_errors = u64::try_from(read_u128_le(log, 160).ok_or(MetricQuality::Invalid)?)
+        .map_err(|_| MetricQuality::Invalid)?;
     let read_tb = nvme_data_units_to_tb(read_units).ok_or(MetricQuality::Invalid)?;
     let written_tb = nvme_data_units_to_tb(written_units).ok_or(MetricQuality::Invalid)?;
 
@@ -424,17 +429,13 @@ fn metric_from_descriptor_quality<T>(
 fn validate_descriptor_header_result(
     io_succeeded: bool,
     bytes_returned: usize,
-    expected_len: usize,
+    minimum_len: usize,
 ) -> Result<(), MetricQuality> {
-    if bytes_returned != expected_len {
-        return Err(if io_succeeded {
-            MetricQuality::Invalid
-        } else {
-            MetricQuality::Unavailable
-        });
-    }
     if !io_succeeded {
         return Err(MetricQuality::Unavailable);
+    }
+    if bytes_returned < minimum_len {
+        return Err(MetricQuality::Invalid);
     }
     Ok(())
 }
@@ -447,8 +448,8 @@ fn query_storage_descriptor(handle: HANDLE) -> Result<StorageDescriptor, MetricQ
     };
 
     unsafe {
-        // 先取固定 header，再按设备报告的 Size 分配完整返回缓冲。
-        let mut header = [0_u8; STORAGE_PROTOCOL_DATA_DESCRIPTOR_HEADER_SIZE];
+        // 先取 Storage device descriptor 的固定字段，再按设备报告的 Size 分配完整缓冲。
+        let mut header = [0_u8; STORAGE_DEVICE_DESCRIPTOR_FIXED_SIZE];
         let mut header_returned = 0_u32;
         let header_ok = DeviceIoControl(
             handle,
@@ -465,6 +466,9 @@ fn query_storage_descriptor(handle: HANDLE) -> Result<StorageDescriptor, MetricQ
             usize::try_from(header_returned).map_err(|_| MetricQuality::Invalid)?;
 
         validate_descriptor_header_result(header_ok != 0, header_returned_len, header.len())?;
+        if header_returned_len > header.len() {
+            return Err(MetricQuality::Invalid);
+        }
 
         let descriptor_size =
             usize::try_from(read_u32_le(&header, 4).ok_or(MetricQuality::Invalid)?)
@@ -572,6 +576,7 @@ fn query_nvme_health_info(handle: HANDLE) -> Option<NvmeHealthInfo> {
             protocol_data_request_sub_value2: 0,
             protocol_data_request_sub_value3: 0,
             protocol_data_request_sub_value4: 0,
+            reserved: [0; 3],
         },
     };
 
@@ -899,6 +904,30 @@ mod tests {
     }
 
     #[test]
+    fn storage_device_protocol_specific_property_is_device_property() {
+        assert_eq!(STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY, 50);
+    }
+
+    #[test]
+    fn storage_protocol_structs_match_windows_fixture_sizes() {
+        assert_eq!(STORAGE_DEVICE_DESCRIPTOR_FIXED_SIZE, 36);
+        assert_eq!(size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>(), 52);
+        assert_eq!(size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>(), 60);
+        assert_eq!(size_of::<STORAGE_PROPERTY_QUERY_PROTOCOL>(), 60);
+        assert_eq!(STORAGE_PROTOCOL_DATA_DESCRIPTOR_HEADER_SIZE, 8);
+    }
+
+    #[test]
+    fn descriptor_probe_accepts_device_header_length_not_protocol_header_length() {
+        assert!(validate_descriptor_header_result(
+            true,
+            STORAGE_DEVICE_DESCRIPTOR_FIXED_SIZE,
+            STORAGE_PROTOCOL_DATA_DESCRIPTOR_HEADER_SIZE,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn short_storage_descriptor_is_invalid_not_a_default_disk() {
         assert_eq!(
             parse_storage_descriptor(&[0; 4]).unwrap_err(),
@@ -989,14 +1018,42 @@ mod tests {
     }
 
     #[test]
-    fn storage_descriptor_rejects_odd_string_offsets_and_unknown_bus_is_none() {
-        let mut descriptor = fixture_descriptor_with_product_offset(41);
-        descriptor[28..32].copy_from_slice(&0xFFFF_u32.to_le_bytes());
+    fn storage_descriptor_accepts_odd_length_descriptor() {
+        let mut descriptor = vec![0_u8; 37];
+        descriptor[0..4].copy_from_slice(&36_u32.to_le_bytes());
+        descriptor[4..8].copy_from_slice(&37_u32.to_le_bytes());
+        descriptor[36] = 0;
+
+        let parsed = parse_storage_descriptor(&descriptor).expect("奇数长度 descriptor 应可解析");
+        assert_eq!(parsed.removable, Some(false));
+        assert_eq!(parsed.vendor, None);
+        assert_eq!(parsed.product, None);
+    }
+
+    #[test]
+    fn storage_descriptor_accepts_odd_ansi_string_offset() {
+        let mut descriptor = vec![0_u8; 64];
+        descriptor[0..4].copy_from_slice(&36_u32.to_le_bytes());
+        descriptor[4..8].copy_from_slice(&64_u32.to_le_bytes());
+        descriptor[16..20].copy_from_slice(&41_u32.to_le_bytes());
+        descriptor[41..43].copy_from_slice(b"X\0");
+
+        let parsed = parse_storage_descriptor(&descriptor).expect("奇数字节偏移应可解析");
+        assert_eq!(parsed.product.as_deref(), Some("X"));
+    }
+
+    #[test]
+    fn storage_descriptor_requires_nul_terminated_strings() {
+        let mut descriptor = fixture_descriptor_with_product_offset(40);
+        descriptor[40..].fill(b'X');
         assert_eq!(
             parse_storage_descriptor(&descriptor).unwrap_err(),
             MetricQuality::Invalid
         );
+    }
 
+    #[test]
+    fn storage_descriptor_unknown_bus_is_none() {
         let mut descriptor = fixture_descriptor_with_product_offset(40);
         descriptor[28..32].copy_from_slice(&0xFFFF_u32.to_le_bytes());
         descriptor[40] = 0;
@@ -1005,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn nvme_health_reads_complete_little_endian_128_bit_counters() {
+    fn nvme_health_reads_u128_log_counters_that_fit_public_u64_fields() {
         let mut log = vec![0_u8; 512];
         log[1..3].copy_from_slice(&300_u16.to_le_bytes());
         log[3] = 99;
@@ -1013,10 +1070,10 @@ mod tests {
         log[5] = 7;
         let read_units = (1_u128 << 96) | 123;
         let written_units = (1_u128 << 80) | 456;
-        let power_cycles = (1_u128 << 100) | 8;
-        let power_hours = (1_u128 << 90) | 9;
-        let unsafe_shutdowns = (1_u128 << 70) | 10;
-        let media_errors = (1_u128 << 65) | 11;
+        let power_cycles = (u64::MAX as u128) - 8;
+        let power_hours = (u64::MAX as u128) - 9;
+        let unsafe_shutdowns = (u64::MAX as u128) - 10;
+        let media_errors = (u64::MAX as u128) - 11;
         log[32..48].copy_from_slice(&read_units.to_le_bytes());
         log[48..64].copy_from_slice(&written_units.to_le_bytes());
         log[112..128].copy_from_slice(&power_cycles.to_le_bytes());
@@ -1026,12 +1083,32 @@ mod tests {
 
         let parsed = parse_nvme_health_log(&log, 10).expect("完整健康日志应解析");
         assert_eq!(parsed.temperature_c.quality, MetricQuality::Good);
-        assert_eq!(parsed.power_cycles.value, Some(power_cycles));
-        assert_eq!(parsed.power_on_hours.value, Some(power_hours));
-        assert_eq!(parsed.unsafe_shutdowns.value, Some(unsafe_shutdowns));
-        assert_eq!(parsed.media_errors.value, Some(media_errors));
-        assert!(parsed.data_units_read_tb.value.unwrap() > 0.0);
+        assert_eq!(parsed.power_cycles.value, Some(power_cycles as u64));
+        assert_eq!(parsed.power_on_hours.value, Some(power_hours as u64));
+        assert_eq!(parsed.unsafe_shutdowns.value, Some(unsafe_shutdowns as u64));
+        assert_eq!(parsed.media_errors.value, Some(media_errors as u64));
+        assert_eq!(
+            parsed.data_units_read_tb.value,
+            nvme_data_units_to_tb(read_units)
+        );
+        assert_eq!(
+            parsed.data_units_written_tb.value,
+            nvme_data_units_to_tb(written_units)
+        );
         assert_eq!(parsed.power_cycles.timestamp, 10);
+    }
+
+    #[test]
+    fn nvme_health_rejects_counter_overflow_for_public_u64_fields() {
+        for offset in [112_usize, 128, 144, 160] {
+            let mut log = vec![0_u8; 512];
+            log[offset..offset + 16].copy_from_slice(&(u128::from(u64::MAX) + 1).to_le_bytes());
+            assert_eq!(
+                parse_nvme_health_log(&log, 10).unwrap_err(),
+                MetricQuality::Invalid,
+                "offset {offset} 的 128 位计数超出 u64 应无效"
+            );
+        }
     }
 
     #[test]
@@ -1064,17 +1141,41 @@ mod tests {
 
     #[test]
     fn protocol_data_location_uses_returned_descriptor_offsets() {
-        let mut buffer = vec![0_u8; 640];
-        buffer[0..4].copy_from_slice(&48_u32.to_le_bytes());
-        buffer[4..8].copy_from_slice(&48_u32.to_le_bytes());
+        let data_offset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + size_of::<u32>();
+        let data_start = STORAGE_PROTOCOL_DATA_DESCRIPTOR_HEADER_SIZE + data_offset;
+        let descriptor_size = data_start + NVME_HEALTH_LOG_LEN;
+        let mut buffer = vec![0_u8; descriptor_size];
+        buffer[0..4].copy_from_slice(
+            &(u32::try_from(size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>()).unwrap()).to_le_bytes(),
+        );
+        buffer[4..8].copy_from_slice(&(descriptor_size as u32).to_le_bytes());
         buffer[8..12].copy_from_slice(&PROTOCOL_TYPE_NVME.to_le_bytes());
         buffer[12..16].copy_from_slice(&NVME_DATA_TYPE_LOG_PAGE.to_le_bytes());
-        buffer[24..28].copy_from_slice(&40_u32.to_le_bytes());
+        buffer[24..28].copy_from_slice(&(data_offset as u32).to_le_bytes());
         buffer[28..32].copy_from_slice(&512_u32.to_le_bytes());
-        buffer[48] = 0xA5;
+        buffer[40] = 0x5A;
+        buffer[48..60].fill(0xCC);
+        buffer[60] = 0x5B;
+        buffer[data_start] = 0xA5;
 
-        let log = locate_protocol_data(&buffer, 560).expect("有效偏移应定位日志");
+        let log = locate_protocol_data(&buffer, descriptor_size).expect("有效偏移应定位日志");
         assert_eq!(log[0], 0xA5);
         assert_eq!(log.len(), 512);
+    }
+
+    #[test]
+    fn protocol_data_offset_must_cover_protocol_specific_data() {
+        let mut buffer = vec![0_u8; 8 + 44 + NVME_HEALTH_LOG_LEN];
+        buffer[0..4].copy_from_slice(&60_u32.to_le_bytes());
+        buffer[4..8].copy_from_slice(&60_u32.to_le_bytes());
+        buffer[8..12].copy_from_slice(&PROTOCOL_TYPE_NVME.to_le_bytes());
+        buffer[12..16].copy_from_slice(&NVME_DATA_TYPE_LOG_PAGE.to_le_bytes());
+        buffer[24..28].copy_from_slice(&44_u32.to_le_bytes());
+        buffer[28..32].copy_from_slice(&512_u32.to_le_bytes());
+
+        assert_eq!(
+            locate_protocol_data(&buffer, buffer.len()).unwrap_err(),
+            MetricQuality::Invalid
+        );
     }
 }
