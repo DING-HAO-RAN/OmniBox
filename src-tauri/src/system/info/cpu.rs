@@ -12,8 +12,8 @@ use windows_sys::Win32::System::Registry::{
     REG_EXPAND_SZ, REG_SZ,
 };
 use windows_sys::Win32::System::SystemInformation::{
-    GetLogicalProcessorInformationEx, RelationProcessorCore,
-    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+    GetLogicalProcessorInformationEx, RelationProcessorCore, GROUP_AFFINITY,
+    PROCESSOR_RELATIONSHIP, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
 };
 use windows_sys::Win32::System::Threading::{
     GetActiveProcessorCount, GetSystemTimes, ALL_PROCESSOR_GROUPS,
@@ -210,13 +210,21 @@ fn decode_registry_string(data: &[u8]) -> Result<Option<String>, MetricQuality> 
     }
 }
 
-/// 读取真实的处理器名称注册表值。
-fn get_cpu_name_from_reg() -> Result<Option<String>, MetricQuality> {
+/// 读取真实的处理器名称注册表值及其质量状态。
+fn get_cpu_name_from_reg_result() -> Result<Option<String>, MetricQuality> {
     let (data_type, data) = query_registry_value("ProcessorNameString")?;
     if data_type != REG_SZ && data_type != REG_EXPAND_SZ {
         return Err(MetricQuality::ReadError);
     }
     decode_registry_string(&data)
+}
+
+/// 读取处理器名称；注册表读取失败时保持历史 API 的空字符串约定。
+pub fn get_cpu_name_from_reg() -> String {
+    get_cpu_name_from_reg_result()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// 读取真实的处理器基准频率注册表值。
@@ -591,6 +599,95 @@ fn cache_metric(_value: Option<u32>) -> MetricValue<u32> {
     )
 }
 
+/// 校验一个 RelationProcessorCore 变长记录，并返回其步进长度。
+///
+/// 这里只按字节读取固定头和 GroupCount，避免把包含变长 GroupMask 的外层结构体
+/// 大小误当成每条记录的固定长度。
+fn validate_processor_core_record(
+    buffer: &[u8],
+    offset: usize,
+    returned_len: usize,
+) -> Result<usize, MetricQuality> {
+    const EX_HEADER_SIZE: usize = 8; // Relationship(4) + Size(4)
+    let alignment = std::mem::align_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>();
+    let processor_fixed_size = std::mem::offset_of!(PROCESSOR_RELATIONSHIP, GroupMask);
+    let group_count_offset = std::mem::offset_of!(PROCESSOR_RELATIONSHIP, GroupCount);
+    let group_mask_size = std::mem::size_of::<GROUP_AFFINITY>();
+
+    if returned_len == 0
+        || returned_len > buffer.len()
+        || offset >= returned_len
+        || offset % alignment != 0
+    {
+        return Err(MetricQuality::ReadError);
+    }
+
+    let remaining = returned_len
+        .checked_sub(offset)
+        .ok_or(MetricQuality::ReadError)?;
+    if remaining < EX_HEADER_SIZE {
+        return Err(MetricQuality::ReadError);
+    }
+
+    let relationship = i32::from_ne_bytes(
+        buffer[offset..offset + 4]
+            .try_into()
+            .map_err(|_| MetricQuality::ReadError)?,
+    );
+    if relationship != RelationProcessorCore {
+        return Err(MetricQuality::ReadError);
+    }
+
+    let record_size = u32::from_ne_bytes(
+        buffer[offset + 4..offset + 8]
+            .try_into()
+            .map_err(|_| MetricQuality::ReadError)?,
+    ) as usize;
+    let minimum_record_size = EX_HEADER_SIZE
+        .checked_add(processor_fixed_size)
+        .ok_or(MetricQuality::ReadError)?;
+    let record_end = offset
+        .checked_add(record_size)
+        .ok_or(MetricQuality::ReadError)?;
+    if record_size < minimum_record_size
+        || record_size % alignment != 0
+        || record_end > returned_len
+    {
+        return Err(MetricQuality::ReadError);
+    }
+
+    let group_count_start = offset
+        .checked_add(EX_HEADER_SIZE)
+        .and_then(|start| start.checked_add(group_count_offset))
+        .ok_or(MetricQuality::ReadError)?;
+    let group_count_end = group_count_start
+        .checked_add(std::mem::size_of::<u16>())
+        .ok_or(MetricQuality::ReadError)?;
+    if group_count_end > record_end {
+        return Err(MetricQuality::ReadError);
+    }
+    let group_count = u16::from_ne_bytes(
+        buffer[group_count_start..group_count_end]
+            .try_into()
+            .map_err(|_| MetricQuality::ReadError)?,
+    );
+    if group_count == 0 {
+        return Err(MetricQuality::ReadError);
+    }
+
+    let group_masks_size = usize::from(group_count)
+        .checked_mul(group_mask_size)
+        .ok_or(MetricQuality::ReadError)?;
+    let required_record_size = minimum_record_size
+        .checked_add(group_masks_size)
+        .ok_or(MetricQuality::ReadError)?;
+    if record_size < required_record_size {
+        return Err(MetricQuality::ReadError);
+    }
+
+    Ok(record_size)
+}
+
 /// 使用动态缓冲区统计 RelationProcessorCore 记录数。
 fn get_physical_core_count() -> Result<u32, MetricQuality> {
     unsafe {
@@ -629,31 +726,11 @@ fn get_physical_core_count() -> Result<u32, MetricQuality> {
             return Err(MetricQuality::ReadError);
         }
 
-        let header_size = std::mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>();
-        let alignment = std::mem::align_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>();
+        let buffer_bytes = std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), allocated_len);
         let mut offset = 0usize;
         let mut count = 0u32;
         while offset < returned_len {
-            if returned_len - offset < header_size || offset % alignment != 0 {
-                return Err(MetricQuality::ReadError);
-            }
-
-            let record = buffer
-                .as_ptr()
-                .cast::<u8>()
-                .add(offset)
-                .cast::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>();
-            let record_size = (*record).Size as usize;
-            if record_size < header_size
-                || record_size % alignment != 0
-                || record_size > returned_len - offset
-            {
-                return Err(MetricQuality::ReadError);
-            }
-            if (*record).Relationship != RelationProcessorCore {
-                return Err(MetricQuality::ReadError);
-            }
-
+            let record_size = validate_processor_core_record(buffer_bytes, offset, returned_len)?;
             count = count.checked_add(1).ok_or(MetricQuality::ReadError)?;
             offset = offset
                 .checked_add(record_size)
@@ -713,7 +790,7 @@ fn collect_cache_metrics(cache_result: Result<CacheInfo, MetricQuality>) -> [Met
 
 /// 采集 CPU 静态硬件信息。
 pub fn collect_cpu_static_info() -> CpuStaticInfo {
-    let registry_name = get_cpu_name_from_reg();
+    let registry_name = get_cpu_name_from_reg_result();
     let cpuid = query_cpuid_features();
     let cache_metrics = collect_cache_metrics(query_cpuid_cache_info());
     let [l1_data_cache_kb, l1_inst_cache_kb, l2_cache_kb, l3_cache_kb] = cache_metrics;
@@ -979,6 +1056,40 @@ pub fn collect_cpu_runtime_info() -> CpuRuntimeInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn short_processor_core_fixture() -> Vec<u8> {
+        let header_size = 8;
+        let processor_relationship_fixed_size = 24;
+        let group_mask_size = std::mem::size_of::<usize>() + 8;
+        let required_size = header_size + processor_relationship_fixed_size + group_mask_size;
+        let alignment = std::mem::align_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>();
+        let record_size = (required_size + alignment - 1) / alignment * alignment;
+        let mut record = vec![0u8; record_size];
+
+        record[0..4].copy_from_slice(&(RelationProcessorCore as i32).to_ne_bytes());
+        record[4..8].copy_from_slice(&(record_size as u32).to_ne_bytes());
+        record[header_size + 22..header_size + 24].copy_from_slice(&1_u16.to_ne_bytes());
+        record[header_size + processor_relationship_fixed_size] = 1;
+        record
+    }
+
+    #[test]
+    fn processor_core_length_accepts_short_one_group_fixture() {
+        let record = short_processor_core_fixture();
+        assert_eq!(
+            validate_processor_core_record(&record, 0, record.len()),
+            Ok(record.len())
+        );
+    }
+
+    #[test]
+    fn processor_core_length_rejects_truncated_fixture() {
+        let record = short_processor_core_fixture();
+        assert_eq!(
+            validate_processor_core_record(&record, 0, record.len() - 1),
+            Err(MetricQuality::ReadError)
+        );
+    }
 
     #[test]
     fn avx_dependent_features_require_hardware_and_os_state() {
