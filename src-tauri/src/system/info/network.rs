@@ -97,7 +97,7 @@ struct TcpEndpoint {
     pid: Option<u32>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AdapterAddressData {
     ipv4_addresses: Vec<String>,
     ipv6_addresses: Vec<String>,
@@ -113,6 +113,8 @@ struct AdapterAddressTable {
     by_luid: HashMap<u64, AdapterAddressData>,
     // IfIndex 与 Ipv6IfIndex 仅作为兼容别名，统一指向 LUID。
     by_index: HashMap<u32, u64>,
+    // 旧版本节点缺少 LUID 时，按唯一非零索引保存地址数据。
+    fallback_by_index: HashMap<u32, AdapterAddressData>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -182,18 +184,22 @@ fn exact_rate_for_elapsed(delta: u64, elapsed_seconds: f64) -> Option<u64> {
     let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
     let fraction = bits & ((1u64 << 52) - 1);
     let (significand, binary_shift) = if exponent_bits == 0 {
-        // 子正常数都小于 1 秒，调用方会在此之前保守拒绝。
+        // 子正常数使用最小二进制指数，仍按精确有理数参与计算。
         (fraction, -1074)
     } else {
         (fraction | (1u64 << 52), exponent_bits - 1023 - 52)
     };
-    if significand == 0 {
+    if significand == 0 || delta == 0 {
         return Some(0);
     }
 
     if binary_shift >= 0 {
         // elapsed = significand * 2^binary_shift；分母大于 delta 时速率就是 0。
-        let Some(denominator) = u128::from(significand).checked_shl(binary_shift as u32) else {
+        let shift = binary_shift as u32;
+        if shift >= 128 {
+            return Some(0);
+        }
+        let Some(denominator) = u128::from(significand).checked_mul(1u128 << shift) else {
             return Some(0);
         };
         if denominator > u128::from(delta) {
@@ -202,13 +208,35 @@ fn exact_rate_for_elapsed(delta: u64, elapsed_seconds: f64) -> Option<u64> {
         return u64::try_from(u128::from(delta) / denominator).ok();
     }
 
-    // elapsed = significand / 2^shift；用 u128 保持 delta 左移的精确性。
+    // elapsed = significand / 2^left_shift；余数用逐位长除法缩放，避免大整数移位溢出。
     let left_shift = u32::try_from(-binary_shift).ok()?;
     let quotient = delta / significand;
     let remainder = delta % significand;
-    let high = quotient.checked_shl(left_shift)?;
-    let low = (u128::from(remainder) << left_shift) / u128::from(significand);
-    high.checked_add(u64::try_from(low).ok()?)
+    let high = if quotient == 0 {
+        0
+    } else {
+        if left_shift >= 64 {
+            return None;
+        }
+        quotient.checked_mul(1u64 << left_shift)?
+    };
+
+    let mut scaled_remainder = remainder;
+    let mut low = 0u64;
+    for _ in 0..left_shift {
+        // remainder < significand <= 2^53，乘 2 不会超出 u64。
+        let doubled = scaled_remainder.checked_mul(2)?;
+        let bit = if doubled >= significand {
+            scaled_remainder = doubled - significand;
+            1
+        } else {
+            scaled_remainder = doubled;
+            0
+        };
+        low = low.checked_mul(2)?.checked_add(bit)?;
+    }
+
+    high.checked_add(low)
 }
 
 /// 计算两个累计计数器之间的速率；首次采样、回退、非法时间和无法安全表示的速率均无值。
@@ -219,11 +247,6 @@ pub(crate) fn calculate_rate(
 ) -> Option<u64> {
     let previous_total = previous_total?;
     if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 || current_total < previous_total {
-        return None;
-    }
-
-    // 小于一秒时允许保守返回 None，避免由浮点边界伪造超出 u64 的速率。
-    if elapsed_seconds < 1.0 {
         return None;
     }
 
@@ -747,6 +770,65 @@ fn merge_adapter_address_data(target: &mut AdapterAddressData, mut source: Adapt
     }
 }
 
+fn register_adapter_index_data(
+    table: &mut AdapterAddressTable,
+    indices: &[u32],
+    owner_luid: Option<u64>,
+    fallback_data: Option<AdapterAddressData>,
+) -> Result<(), MetricQuality> {
+    // 同一 LUID 的多个节点可以共享别名；不同节点复用索引则拒绝，避免串接错误地址。
+    for &index in indices {
+        match owner_luid {
+            Some(luid) => {
+                if table.fallback_by_index.contains_key(&index)
+                    || table
+                        .by_index
+                        .get(&index)
+                        .is_some_and(|existing| *existing != luid)
+                {
+                    return Err(MetricQuality::Invalid);
+                }
+            }
+            None => {
+                if table.by_index.contains_key(&index)
+                    || table.fallback_by_index.contains_key(&index)
+                {
+                    return Err(MetricQuality::Invalid);
+                }
+            }
+        }
+    }
+
+    match owner_luid {
+        Some(luid) => {
+            for &index in indices {
+                table.by_index.insert(index, luid);
+            }
+        }
+        None => {
+            let data = fallback_data.ok_or(MetricQuality::Invalid)?;
+            for &index in indices {
+                table.fallback_by_index.insert(index, data.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn adapter_address_data_for_row<'a>(
+    table: &'a AdapterAddressTable,
+    interface_luid: u64,
+    interface_index: u32,
+) -> Option<&'a AdapterAddressData> {
+    table.by_luid.get(&interface_luid).or_else(|| {
+        table
+            .by_index
+            .get(&interface_index)
+            .and_then(|luid| table.by_luid.get(luid))
+            .or_else(|| table.fallback_by_index.get(&interface_index))
+    })
+}
+
 unsafe fn parse_adapter_addresses_buffer(
     buffer: &[u8],
 ) -> Result<AdapterAddressTable, MetricQuality> {
@@ -766,15 +848,20 @@ unsafe fn parse_adapter_addresses_buffer(
         }
         let adapter = declared_node(current, base, buffer)?;
 
-        // LUID 是跨 IPv4/IPv6 和索引变化的稳定身份，缺失时不能安全回填到 MIB_IF_ROW2。
-        let luid = read_u64_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Luid))
-            .ok_or(MetricQuality::Invalid)?;
-        if luid == 0 {
-            return Err(MetricQuality::Invalid);
-        }
-
+        // LUID 是跨 IPv4/IPv6 和索引变化的稳定身份；短版本节点没有该字段时再尝试索引 fallback。
+        let luid = match read_u64_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Luid)) {
+            Some(0) => return Err(MetricQuality::Invalid),
+            Some(value) => Some(value),
+            None => None,
+        };
         let if_index = read_u32_ne(adapter, size_of::<u32>());
         let ipv6_if_index = read_u32_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Ipv6IfIndex));
+        let mut indices = Vec::with_capacity(2);
+        for index in [if_index, ipv6_if_index].into_iter().flatten() {
+            if index != 0 && !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
         let dhcp_enabled = read_u32_ne(adapter, offset_of!(IP_ADAPTER_ADDRESSES_LH, Anonymous2))
             .map(|flags| (flags & IP_ADAPTER_DHCP_ENABLED) != 0);
         let mut data = AdapterAddressData {
@@ -847,13 +934,15 @@ unsafe fn parse_adapter_addresses_buffer(
             adapter,
             offset_of!(IP_ADAPTER_ADDRESSES_LH, Next),
         );
-        let entry = result.by_luid.entry(luid).or_default();
-        merge_adapter_address_data(entry, data);
-        for index in [if_index, ipv6_if_index].into_iter().flatten() {
-            if index != 0 {
-                result.by_index.insert(index, luid);
-            }
+        if let Some(luid) = luid {
+            let entry = result.by_luid.entry(luid).or_default();
+            merge_adapter_address_data(entry, data);
+            register_adapter_index_data(&mut result, &indices, Some(luid), None)?;
+        } else if !indices.is_empty() {
+            // 无 LUID 且至少有一个声明字段中的非零索引时，才建立安全 fallback 映射。
+            register_adapter_index_data(&mut result, &indices, None, Some(data))?;
         }
+        // 没有任何身份索引的节点只解析并丢弃地址关联，不影响后续节点。
 
         // 旧版本节点没有 Next 时，当前数据仍可用，但不能继续假读后续字段。
         let Some(next) = next else { break };
@@ -1030,40 +1119,47 @@ fn collect_network_adapters_at(timestamp: u64) -> Vec<NetworkAdapterInfo> {
             let interface_luid = interface_luid_value(row);
             let (ipv4_addresses, ipv6_addresses, gateway, dns_servers, dhcp_enabled) =
                 match address_data.as_ref() {
-                    Ok(data) => match data.by_luid.get(&interface_luid) {
-                        Some(data) => (
-                            data.ipv4_addresses.clone(),
-                            data.ipv6_addresses.clone(),
-                            data.gateway.clone(),
-                            data.dns_servers.clone(),
-                            data.dhcp_enabled
-                                .map(|enabled| {
-                                    MetricValue::good_at(enabled, "", IP_HELPER_SOURCE, timestamp)
-                                })
-                                .unwrap_or_else(|| {
-                                    missing_metric_at(
-                                        "",
-                                        IP_HELPER_SOURCE,
-                                        MetricQuality::Unsupported,
-                                        "地址节点未包含 DHCP Flags，DHCP 状态不可用",
-                                        timestamp,
-                                    )
-                                }),
-                        ),
-                        None => (
-                            Vec::new(),
-                            Vec::new(),
-                            String::new(),
-                            Vec::new(),
-                            missing_metric_at(
-                                "",
-                                IP_HELPER_SOURCE,
-                                MetricQuality::Unsupported,
-                                "地址 API 未返回该接口，DHCP 状态不可用",
-                                timestamp,
+                    Ok(data) => {
+                        match adapter_address_data_for_row(data, interface_luid, interface_index) {
+                            Some(data) => (
+                                data.ipv4_addresses.clone(),
+                                data.ipv6_addresses.clone(),
+                                data.gateway.clone(),
+                                data.dns_servers.clone(),
+                                data.dhcp_enabled
+                                    .map(|enabled| {
+                                        MetricValue::good_at(
+                                            enabled,
+                                            "",
+                                            IP_HELPER_SOURCE,
+                                            timestamp,
+                                        )
+                                    })
+                                    .unwrap_or_else(|| {
+                                        missing_metric_at(
+                                            "",
+                                            IP_HELPER_SOURCE,
+                                            MetricQuality::Unsupported,
+                                            "地址节点未包含 DHCP Flags，DHCP 状态不可用",
+                                            timestamp,
+                                        )
+                                    }),
                             ),
-                        ),
-                    },
+                            None => (
+                                Vec::new(),
+                                Vec::new(),
+                                String::new(),
+                                Vec::new(),
+                                missing_metric_at(
+                                    "",
+                                    IP_HELPER_SOURCE,
+                                    MetricQuality::Unsupported,
+                                    "地址 API 未返回该接口，DHCP 状态不可用",
+                                    timestamp,
+                                ),
+                            ),
+                        }
+                    }
                     Err(quality) => (
                         Vec::new(),
                         Vec::new(),
@@ -1294,13 +1390,77 @@ mod tests {
         buffer
     }
 
+    fn adapter_buffer_without_luid(if_index: u32, address: [u8; 4]) -> Vec<u8> {
+        let mut buffer = adapter_buffer(0, if_index, 0);
+        let node_offset = buffer.len();
+        let address_offset = offset_of!(IP_ADAPTER_UNICAST_ADDRESS_LH, Address);
+        let node_length = address_offset + size_of::<SOCKET_ADDRESS>();
+        let sockaddr_offset = node_offset + node_length;
+        buffer.resize(sockaddr_offset + 8, 0);
+        put_u32(&mut buffer, node_offset, node_length as u32);
+
+        unsafe {
+            let socket_address = SOCKET_ADDRESS {
+                lpSockaddr: buffer.as_mut_ptr().add(sockaddr_offset) as *mut _,
+                iSockaddrLength: 8,
+            };
+            ptr::write_unaligned(
+                buffer.as_mut_ptr().add(node_offset + address_offset) as *mut SOCKET_ADDRESS,
+                socket_address,
+            );
+            put_pointer::<IP_ADAPTER_UNICAST_ADDRESS_LH>(
+                &mut buffer,
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, FirstUnicastAddress),
+                node_offset,
+            );
+        }
+        buffer[sockaddr_offset..sockaddr_offset + 2]
+            .copy_from_slice(&(AF_INET as u16).to_ne_bytes());
+        buffer[sockaddr_offset + 4..sockaddr_offset + 8].copy_from_slice(&address);
+
+        // Length 截止到 Ipv6IfIndex 字段之前，模拟只有 IfIndex 的旧版本节点。
+        put_u32(
+            &mut buffer,
+            0,
+            offset_of!(IP_ADAPTER_ADDRESSES_LH, Ipv6IfIndex) as u32,
+        );
+        buffer
+    }
+
+    fn conflicting_index_adapter_buffer() -> Vec<u8> {
+        let first = adapter_buffer(0x10, 42, 0);
+        let second_offset = first.len();
+        let mut buffer = first;
+        buffer.extend(adapter_buffer(0x20, 42, 0));
+        unsafe {
+            put_pointer::<IP_ADAPTER_ADDRESSES_LH>(
+                &mut buffer,
+                offset_of!(IP_ADAPTER_ADDRESSES_LH, Next),
+                second_offset,
+            );
+        }
+        buffer
+    }
+
     #[test]
     fn counter_reset_produces_no_network_rate() {
         assert_eq!(calculate_rate(Some(500), 100, 1.0), None);
     }
 
     #[test]
+    fn valid_subsecond_rate_is_not_discarded() {
+        assert_eq!(calculate_rate(Some(0), 100, 0.5), Some(200));
+    }
+
+    #[test]
+    fn exact_subsecond_division_handles_small_delta_without_shift_overflow() {
+        // 2^-12 秒内传输 1 字节，精确速率为 4096 Bytes/s。
+        assert_eq!(exact_rate_for_elapsed(1, 0.000244140625), Some(4096));
+    }
+
+    #[test]
     fn subsecond_rate_does_not_round_overflow_to_u64_max() {
+        assert_eq!(exact_rate_for_elapsed(1u64 << 63, 0.5), None);
         assert_eq!(calculate_rate(Some(0), 1u64 << 63, 0.5), None);
     }
 
@@ -1320,6 +1480,49 @@ mod tests {
         assert!(table.by_luid.contains_key(&luid));
         assert_eq!(table.by_index.get(&if_index), Some(&luid));
         assert_eq!(table.by_index.get(&ipv6_if_index), Some(&luid));
+    }
+
+    #[test]
+    fn address_without_luid_is_associated_by_unique_if_index() {
+        let if_index = 77;
+        let buffer = adapter_buffer_without_luid(if_index, [192, 0, 2, 77]);
+
+        let table = unsafe { parse_adapter_addresses_buffer(&buffer) }
+            .expect("缺少 LUID 但含 IfIndex 的地址节点应可解析");
+        let data = adapter_address_data_for_row(&table, 0xdead_beef, if_index)
+            .expect("应按 IfIndex 建立地址关联");
+        assert_eq!(data.ipv4_addresses, vec!["192.0.2.77"]);
+    }
+
+    #[test]
+    fn conflicting_index_aliases_are_rejected_instead_of_overwritten() {
+        let buffer = conflicting_index_adapter_buffer();
+
+        assert!(matches!(
+            unsafe { parse_adapter_addresses_buffer(&buffer) },
+            Err(MetricQuality::Invalid)
+        ));
+    }
+
+    #[test]
+    fn declared_zero_luid_is_rejected_instead_of_used_as_fallback() {
+        let buffer = adapter_buffer(0, 42, 0);
+
+        assert!(matches!(
+            unsafe { parse_adapter_addresses_buffer(&buffer) },
+            Err(MetricQuality::Invalid)
+        ));
+    }
+
+    #[test]
+    fn adapter_without_any_identity_index_is_skipped_safely() {
+        let buffer = adapter_buffer_without_luid(0, [192, 0, 2, 78]);
+
+        let table = unsafe { parse_adapter_addresses_buffer(&buffer) }
+            .expect("没有身份索引的节点应被安全跳过");
+        assert!(table.by_luid.is_empty());
+        assert!(table.by_index.is_empty());
+        assert!(table.fallback_by_index.is_empty());
     }
 
     #[test]
