@@ -100,6 +100,15 @@ fn read_process_working_set(pid: u32) -> MetricValue<u64> {
 const PROCESS_DISPLAY_LIMIT: usize = 25;
 const PROCESS_SOURCE: &str = "Win32_Toolhelp32";
 
+/// Toolhelp 枚举失败且系统未提供错误码时，必须保持非 Good 状态。
+fn classify_process_enumeration_error(error_code: u32) -> MetricQuality {
+    if error_code == 0 {
+        MetricQuality::ApiUnavailable
+    } else {
+        classify_win32_error(error_code)
+    }
+}
+
 fn process_status_for(
     total_processes: u32,
     returned_items: usize,
@@ -183,11 +192,7 @@ pub(crate) fn collect_processes_snapshot_with_status() -> CollectorResult<Proces
                 if Process32NextW(snapshot, &mut entry) == 0 {
                     let error_code = GetLastError();
                     if error_code != windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES {
-                        quality = if error_code == 0 {
-                            MetricQuality::ApiUnavailable
-                        } else {
-                            classify_win32_error(error_code)
-                        };
+                        quality = classify_process_enumeration_error(error_code);
                         error = Some(format!(
                             "Toolhelp32 process continuation failed (Win32 error {error_code})"
                         ));
@@ -198,7 +203,7 @@ pub(crate) fn collect_processes_snapshot_with_status() -> CollectorResult<Proces
         } else {
             let error_code = GetLastError();
             if error_code != windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES {
-                quality = classify_win32_error(error_code);
+                quality = classify_process_enumeration_error(error_code);
                 error = Some(format!(
                     "Toolhelp32 process enumeration failed (Win32 error {error_code})"
                 ));
@@ -274,5 +279,14 @@ mod tests {
         assert_ne!(status.quality, MetricQuality::Good);
         assert_eq!(status.item_count, Some(0));
         assert!(status.error.is_some());
+    }
+
+    #[test]
+    fn zero_process_first_error_is_api_unavailable_not_good() {
+        assert_eq!(
+            classify_process_enumeration_error(0),
+            MetricQuality::ApiUnavailable
+        );
+        assert_ne!(classify_process_enumeration_error(0), MetricQuality::Good);
     }
 }

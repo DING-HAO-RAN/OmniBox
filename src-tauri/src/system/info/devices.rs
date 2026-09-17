@@ -15,7 +15,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     DIGCF_PRESENT, HDEVINFO, SPDRP_CLASS, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SPDRP_HARDWAREID,
     SPDRP_MFG, SP_DEVINFO_DATA,
 };
-use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_NO_MORE_ITEMS};
 use windows_sys::Win32::System::Registry::{REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ};
 
 /// 外设与总线设备条目。
@@ -221,11 +221,23 @@ fn classify_bus_type(hardware_id: &str) -> &'static str {
     }
 }
 
+/// 将 SetupAPI 枚举错误与正常结束条件分开。
+fn classify_device_enumeration_error(error_code: u32) -> Option<MetricQuality> {
+    if error_code == ERROR_NO_MORE_ITEMS {
+        None
+    } else if error_code == 0 {
+        Some(MetricQuality::ApiUnavailable)
+    } else {
+        Some(classify_win32_error(error_code))
+    }
+}
+
 /// 枚举系统中所有即插即用设备与外设。
-fn collect_devices_snapshot_raw() -> (DevicesSnapshot, Option<MetricQuality>) {
+fn collect_devices_snapshot_raw() -> (DevicesSnapshot, Option<(MetricQuality, u32)>) {
     let mut usb = Vec::new();
     let mut pci = Vec::new();
     let mut other = Vec::new();
+    let mut failure = None;
 
     unsafe {
         let dev_info = SetupDiGetClassDevsW(
@@ -236,16 +248,21 @@ fn collect_devices_snapshot_raw() -> (DevicesSnapshot, Option<MetricQuality>) {
         );
 
         if dev_info == 0 || dev_info == -1 {
+            let error_code = GetLastError();
             return (
                 DevicesSnapshot {
                     usb_devices: usb,
                     pci_devices: pci,
                     other_pnp_devices: other,
                 },
-                Some(match GetLastError() {
-                    0 => MetricQuality::ApiUnavailable,
-                    code => classify_win32_error(code),
-                }),
+                Some((
+                    if error_code == 0 {
+                        MetricQuality::ApiUnavailable
+                    } else {
+                        classify_win32_error(error_code)
+                    },
+                    error_code,
+                )),
             );
         }
 
@@ -255,6 +272,10 @@ fn collect_devices_snapshot_raw() -> (DevicesSnapshot, Option<MetricQuality>) {
             let mut dev_data: SP_DEVINFO_DATA = std::mem::zeroed();
             dev_data.cbSize = size_of::<SP_DEVINFO_DATA>() as u32;
             if SetupDiEnumDeviceInfo(dev_info, index, &mut dev_data) == 0 {
+                let error_code = GetLastError();
+                if let Some(quality) = classify_device_enumeration_error(error_code) {
+                    failure = Some((quality, error_code));
+                }
                 break;
             }
 
@@ -305,7 +326,7 @@ fn collect_devices_snapshot_raw() -> (DevicesSnapshot, Option<MetricQuality>) {
             pci_devices: pci,
             other_pnp_devices: other,
         },
-        None,
+        failure,
     )
 }
 
@@ -314,11 +335,16 @@ pub(crate) fn collect_devices_snapshot_with_status() -> CollectorResult<DevicesS
     let count =
         snapshot.usb_devices.len() + snapshot.pci_devices.len() + snapshot.other_pnp_devices.len();
     let (quality, error) = match failure {
-        Some(quality) => (quality, Some("SetupAPI device enumeration failed")),
+        Some((quality, error_code)) => (
+            quality,
+            Some(format!(
+                "SetupAPI device enumeration failed (Win32 error {error_code})"
+            )),
+        ),
         None => (MetricQuality::Good, None),
     };
     CollectorResult {
-        status: collection_status_for("SetupAPI", quality, count, false, error),
+        status: collection_status_for("SetupAPI", quality, count, false, error.as_deref()),
         value: snapshot,
     }
 }
@@ -369,5 +395,21 @@ mod tests {
     fn malformed_utf16_property_is_rejected() {
         let malformed = [0x00, 0xd8, 0x00, 0x00];
         assert_eq!(decode_registry_string(REG_SZ, &malformed), None);
+    }
+
+    #[test]
+    fn device_enumeration_only_treats_no_more_items_as_normal_end() {
+        assert_eq!(
+            classify_device_enumeration_error(windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS,),
+            None
+        );
+        assert_eq!(
+            classify_device_enumeration_error(5),
+            Some(MetricQuality::PermissionDenied)
+        );
+        assert_eq!(
+            classify_device_enumeration_error(0),
+            Some(MetricQuality::ApiUnavailable)
+        );
     }
 }

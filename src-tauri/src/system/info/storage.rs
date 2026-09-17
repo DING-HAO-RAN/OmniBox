@@ -9,7 +9,9 @@ use super::quality::{
 };
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
-use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetDiskFreeSpaceExW, GetLogicalDriveStringsW, GetVolumeInformationW,
     FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -692,9 +694,36 @@ fn collect_physical_disk(handle: HANDLE, index: u32, path: &str) -> PhysicalDisk
     }
 }
 
-/// 枚举系统中所有可打开的物理驱动器。
-pub fn collect_physical_disks() -> Vec<PhysicalDiskInfo> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PhysicalDriveOpenError {
+    ExpectedMissing,
+    Failure(MetricQuality),
+}
+
+/// PhysicalDrive 中不存在的索引是正常探测结果，其它打开错误需保留。
+fn classify_physical_drive_open_error(error_code: u32) -> PhysicalDriveOpenError {
+    match error_code {
+        // ERROR_FILE_NOT_FOUND、ERROR_PATH_NOT_FOUND、ERROR_INVALID_DRIVE、
+        // ERROR_INVALID_NAME：当前索引不存在，不代表物理存储 Provider 失败。
+        2 | 3 | 15 | 123 => PhysicalDriveOpenError::ExpectedMissing,
+        0 => PhysicalDriveOpenError::Failure(MetricQuality::ApiUnavailable),
+        code => PhysicalDriveOpenError::Failure(super::quality::classify_win32_error(code)),
+    }
+}
+
+/// 存储集合状态只反映物理盘探测本身或逻辑卷 API 的失败。
+fn storage_collection_quality(
+    physical_failure: Option<MetricQuality>,
+    volume_failure: Option<MetricQuality>,
+) -> MetricQuality {
+    physical_failure
+        .or(volume_failure)
+        .unwrap_or(MetricQuality::Good)
+}
+
+fn collect_physical_disks_with_status() -> (Vec<PhysicalDiskInfo>, Option<(MetricQuality, u32)>) {
     let mut disks = Vec::new();
+    let mut failure = None;
 
     // Windows 物理盘命名空间的索引范围按完整约定覆盖，而非截断为少量样本。
     for index in 0..=255_u32 {
@@ -716,6 +745,13 @@ pub fn collect_physical_disks() -> Vec<PhysicalDiskInfo> {
         };
 
         if handle == INVALID_HANDLE_VALUE {
+            let error_code = unsafe { GetLastError() };
+            if let PhysicalDriveOpenError::Failure(quality) =
+                classify_physical_drive_open_error(error_code)
+            {
+                // 继续探测其它索引，但保留真实的物理盘打开失败。
+                failure.get_or_insert((quality, error_code));
+            }
             // 打不开的索引代表当前不可用设备，不能生成占位磁盘记录。
             continue;
         }
@@ -728,7 +764,12 @@ pub fn collect_physical_disks() -> Vec<PhysicalDiskInfo> {
         disks.push(disk);
     }
 
-    disks
+    (disks, failure)
+}
+
+/// 保持历史公开签名；聚合层使用带状态的内部结果。
+pub fn collect_physical_disks() -> Vec<PhysicalDiskInfo> {
+    collect_physical_disks_with_status().0
 }
 
 fn enumerate_logical_drives_result() -> Result<Vec<String>, MetricQuality> {
@@ -913,19 +954,26 @@ pub fn collect_storage_snapshot() -> StorageSnapshot {
 }
 
 pub(crate) fn collect_storage_snapshot_with_status() -> CollectorResult<StorageSnapshot> {
-    let physical_disks = collect_physical_disks();
+    let (physical_disks, physical_failure) = collect_physical_disks_with_status();
     let (volumes, volume_failure) = collect_logical_volumes_raw();
     let count = physical_disks.len() + volumes.len();
     let snapshot = StorageSnapshot {
         physical_disks,
         volumes,
     };
-    let (quality, error) = match volume_failure {
-        Some(quality) => (quality, Some("Logical volume API failed")),
-        None => (MetricQuality::Good, None),
+    let physical_quality = physical_failure.map(|(quality, _)| quality);
+    let quality = storage_collection_quality(physical_quality, volume_failure);
+    let error = if let Some((_, error_code)) = physical_failure {
+        Some(format!(
+            "Physical disk enumeration failed (Win32 error {error_code})"
+        ))
+    } else if volume_failure.is_some() {
+        Some("Logical volume API failed".to_string())
+    } else {
+        None
     };
     CollectorResult {
-        status: collection_status_for("Win32_Storage", quality, count, false, error),
+        status: collection_status_for("Win32_Storage", quality, count, false, error.as_deref()),
         value: snapshot,
     }
 }
@@ -1255,6 +1303,31 @@ mod tests {
         assert_eq!(
             locate_protocol_data(&buffer, buffer.len()).unwrap_err(),
             MetricQuality::Invalid
+        );
+    }
+
+    #[test]
+    fn physical_drive_missing_indices_are_not_collection_failures() {
+        assert_eq!(
+            classify_physical_drive_open_error(2),
+            PhysicalDriveOpenError::ExpectedMissing
+        );
+        assert_eq!(
+            classify_physical_drive_open_error(5),
+            PhysicalDriveOpenError::Failure(MetricQuality::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn storage_status_aggregates_inventory_and_volume_failures() {
+        assert_eq!(storage_collection_quality(None, None), MetricQuality::Good);
+        assert_eq!(
+            storage_collection_quality(Some(MetricQuality::PermissionDenied), None),
+            MetricQuality::PermissionDenied
+        );
+        assert_eq!(
+            storage_collection_quality(None, Some(MetricQuality::ReadError)),
+            MetricQuality::ReadError
         );
     }
 }
