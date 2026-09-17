@@ -118,9 +118,8 @@
         </div>
         <div class="flex items-baseline gap-1 mt-auto">
           <span class="text-lg font-bold font-mono text-white tracking-tight">
-            {{ totalGb }}
+            {{ totalGbWithUnit }}
           </span>
-          <span class="text-xs text-gray-400">GB</span>
         </div>
         <div class="text-[10px] text-gray-500 mt-0.5 font-mono">
           Win32 系统识别
@@ -137,12 +136,11 @@
         </div>
         <div class="flex items-baseline gap-1 mt-auto">
           <span class="text-lg font-bold font-mono tracking-tight" :class="indicatorTextColor">
-            {{ usedGb }}
+            {{ usedGbWithUnit }}
           </span>
-          <span class="text-xs text-gray-400">GB</span>
         </div>
         <div class="text-[10px] text-gray-500 mt-0.5 font-mono">
-          占比 {{ displayPercent }}%
+          {{ usedPercentSummary }}
         </div>
       </div>
 
@@ -156,12 +154,11 @@
         </div>
         <div class="flex items-baseline gap-1 mt-auto">
           <span class="text-lg font-bold font-mono text-emerald-400 tracking-tight">
-            {{ availableGb }}
+            {{ availableGbWithUnit }}
           </span>
-          <span class="text-xs text-gray-400">GB</span>
         </div>
         <div class="text-[10px] text-gray-500 mt-0.5 font-mono">
-          富余 {{ availablePercent }}%
+          {{ availablePercentSummary }}
         </div>
       </div>
     </div>
@@ -204,6 +201,8 @@ const displayPercent = computed(() => {
   return percent === null ? '—' : Math.min(100, Math.max(0, percent)).toFixed(1);
 });
 
+const usedPercentSummary = computed(() => usagePercent.value === null ? '占比 —' : `占比 ${displayPercent.value}%`);
+
 // 无值时显示空环，避免把缺失指标伪造成有效百分比。
 const dashOffset = computed(() => {
   const percent = usagePercent.value;
@@ -211,10 +210,11 @@ const dashOffset = computed(() => {
 });
 
 // 负荷等级划分：< 60% 健康；60% - 80% 中等；>= 80% 高负荷
-const loadLevel = computed<'healthy' | 'moderate' | 'high'>(() => {
+const loadLevel = computed<'healthy' | 'moderate' | 'high' | 'unknown'>(() => {
   const percent = usagePercent.value;
-  if (percent !== null && percent >= 80) return 'high';
-  if (percent !== null && percent >= 60) return 'moderate';
+  if (percent === null) return 'unknown';
+  if (percent >= 80) return 'high';
+  if (percent >= 60) return 'moderate';
   return 'healthy';
 });
 
@@ -226,8 +226,10 @@ const gaugeGradientUrl = computed(() => {
     case 'moderate':
       return 'url(#moderateGradient)';
     case 'healthy':
-    default:
       return 'url(#healthyGradient)';
+    case 'unknown':
+    default:
+      return 'none';
   }
 });
 
@@ -320,12 +322,17 @@ function toGb(bytes: number | null): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(2);
 }
 
+function formatGbWithUnit(bytes: number | null): string {
+  const value = toGb(bytes);
+  return value === '—' ? value : `${value} GB`;
+}
+
 const totalBytes = computed(() => metricNumber(props.memoryInfo?.total_physical_bytes));
 const usedBytes = computed(() => metricNumber(props.memoryInfo?.used_physical_bytes));
 const availableBytes = computed(() => metricNumber(props.memoryInfo?.available_physical_bytes));
-const totalGb = computed(() => toGb(totalBytes.value));
-const usedGb = computed(() => toGb(usedBytes.value));
-const availableGb = computed(() => toGb(availableBytes.value));
+const totalGbWithUnit = computed(() => formatGbWithUnit(totalBytes.value));
+const usedGbWithUnit = computed(() => formatGbWithUnit(usedBytes.value));
+const availableGbWithUnit = computed(() => formatGbWithUnit(availableBytes.value));
 
 // 只有总量与可用量都有效时才计算剩余百分比。
 const availablePercent = computed(() => {
@@ -334,4 +341,6 @@ const availablePercent = computed(() => {
   if (total === null || available === null || total <= 0) return '—';
   return Math.max(0, Math.min(100, (available / total) * 100)).toFixed(1);
 });
+
+const availablePercentSummary = computed(() => availablePercent.value === '—' ? '富余 —' : `富余 ${availablePercent.value}%`);
 </script>
