@@ -28,14 +28,14 @@ pub fn sanitize_report_json(raw_json: &str) -> String {
 fn sanitize_value(value: &mut Value, sensitive: bool) {
     match value {
         Value::Object(object) => {
-            // 敏感 MetricValue 只清空 value，保留质量和来源等元数据结构。
-            let is_metric_value = sensitive && object.keys().any(|key| is_value_key(key));
+            // 只有完整 MetricValue 才保留元数据；未知字段对象必须整体递归脱敏。
+            let is_metric_value = sensitive && is_complete_metric_value(object);
             for (key, child) in object.iter_mut() {
-                if is_metric_value && is_value_key(key) {
+                if is_metric_value && key == "value" {
                     *child = Value::Null;
                 } else {
                     let child_is_sensitive = if is_metric_value {
-                        is_sensitive_key(key)
+                        false
                     } else {
                         sensitive || is_sensitive_key(key)
                     };
@@ -70,8 +70,15 @@ fn normalized_key(key: &str) -> String {
         .collect()
 }
 
-fn is_value_key(key: &str) -> bool {
-    normalized_key(key) == "value"
+/// 仅把字段集合完全匹配的对象视为 MetricValue，避免未知字段绕过递归脱敏。
+fn is_complete_metric_value(object: &serde_json::Map<String, Value>) -> bool {
+    const REQUIRED_KEYS: &[&str] = &["value", "unit", "quality", "source", "timestamp"];
+
+    (object.len() == REQUIRED_KEYS.len() || object.len() == REQUIRED_KEYS.len() + 1)
+        && REQUIRED_KEYS.iter().all(|key| object.contains_key(*key))
+        && object
+            .keys()
+            .all(|key| REQUIRED_KEYS.contains(&key.as_str()) || key == "error")
 }
 
 /// 判断字段是否属于报告中的敏感身份、地址、路径或密钥字段。
@@ -138,12 +145,12 @@ fn sanitize_string(input: &str) -> String {
 
     if let Ok(username) = env::var("USERNAME") {
         if !username.is_empty() {
-            output = replace_ascii_case_insensitive(&output, &username, "<USER>");
+            output = replace_case_insensitive(&output, &username, "<USER>");
         }
     }
     if let Ok(computer_name) = env::var("COMPUTERNAME") {
         if !computer_name.is_empty() {
-            output = replace_ascii_case_insensitive(&output, &computer_name, "<COMPUTER_NAME>");
+            output = replace_case_insensitive(&output, &computer_name, "<COMPUTER_NAME>");
         }
     }
 
@@ -153,32 +160,59 @@ fn sanitize_string(input: &str) -> String {
     redact_ipv6_addresses(&output)
 }
 
-/// 替换 ASCII 用户名/主机名时保持大小写不敏感且不改动 JSON 结构。
-fn replace_ascii_case_insensitive(input: &str, needle: &str, replacement: &str) -> String {
+/// 按 Unicode 小写形式匹配身份名称，并始终使用原始 UTF-8 字符边界替换。
+fn replace_case_insensitive(input: &str, needle: &str, replacement: &str) -> String {
     if needle.is_empty() {
         return input.to_string();
     }
-    if !needle.is_ascii() {
-        return input.replace(needle, replacement);
+
+    let folded_needle: Vec<char> = needle
+        .chars()
+        .flat_map(|character| character.to_lowercase())
+        .collect();
+    if folded_needle.is_empty() {
+        return input.to_string();
     }
 
-    let lowered_input = input.to_ascii_lowercase();
-    let lowered_needle = needle.to_ascii_lowercase();
+    // 小写转换可能改变字符数量（例如某些 Unicode 大写字符），记录每个
+    // 折叠字符对应的原始字节范围，避免对 UTF-8 字节索引做错误切片。
+    let mut folded_input = Vec::new();
+    for (start, character) in input.char_indices() {
+        let end = start + character.len_utf8();
+        folded_input.extend(character.to_lowercase().map(|folded| (folded, start, end)));
+    }
+
+    let mut matches = Vec::new();
+    let mut folded_cursor = 0;
+    while folded_cursor + folded_needle.len() <= folded_input.len() {
+        let is_match = folded_input[folded_cursor..folded_cursor + folded_needle.len()]
+            .iter()
+            .map(|(character, _, _)| *character)
+            .eq(folded_needle.iter().copied());
+        if !is_match {
+            folded_cursor += 1;
+            continue;
+        }
+
+        let start = folded_input[folded_cursor].1;
+        let end = folded_input[folded_cursor + folded_needle.len() - 1].2;
+        matches.push((start, end));
+        // 跳过本次匹配覆盖的原始字符及其所有折叠结果，避免重复替换。
+        while folded_cursor < folded_input.len() && folded_input[folded_cursor].1 < end {
+            folded_cursor += 1;
+        }
+    }
+
+    if matches.is_empty() {
+        return input.to_string();
+    }
+
     let mut result = String::with_capacity(input.len());
     let mut cursor = 0;
-    let mut replaced = false;
-
-    while let Some(relative_start) = lowered_input[cursor..].find(&lowered_needle) {
-        let start = cursor + relative_start;
-        let end = start + needle.len();
+    for (start, end) in matches {
         result.push_str(&input[cursor..start]);
         result.push_str(replacement);
         cursor = end;
-        replaced = true;
-    }
-
-    if !replaced {
-        return input.to_string();
     }
     result.push_str(&input[cursor..]);
     result
@@ -252,20 +286,74 @@ fn is_mac_at(bytes: &[u8], start: usize) -> bool {
     true
 }
 
-/// 替换常见冒号/连字符格式的 MAC 地址。
+fn is_mac_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn has_conservative_mac_boundaries(bytes: &[u8], start: usize, end: usize) -> bool {
+    (start == 0 || !is_mac_word_byte(bytes[start - 1]))
+        && (end == bytes.len() || !is_mac_word_byte(bytes[end]))
+}
+
+fn is_dotted_mac_at(bytes: &[u8], start: usize) -> bool {
+    const MAC_LENGTH: usize = 14;
+    if start + MAC_LENGTH > bytes.len()
+        || !has_conservative_mac_boundaries(bytes, start, start + MAC_LENGTH)
+    {
+        return false;
+    }
+
+    for group in 0..3 {
+        let group_start = start + group * 5;
+        for offset in 0..4 {
+            if !is_hex_digit(bytes[group_start + offset]) {
+                return false;
+            }
+        }
+        if group < 2 && bytes[group_start + 4] != b'.' {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_compact_mac_at(bytes: &[u8], start: usize) -> bool {
+    const MAC_LENGTH: usize = 12;
+    if start + MAC_LENGTH > bytes.len()
+        || !has_conservative_mac_boundaries(bytes, start, start + MAC_LENGTH)
+    {
+        return false;
+    }
+    bytes[start..start + MAC_LENGTH]
+        .iter()
+        .all(|byte| is_hex_digit(*byte))
+}
+
+fn mac_end_at(bytes: &[u8], start: usize) -> Option<usize> {
+    if is_mac_at(bytes, start) {
+        Some(start + 17)
+    } else if is_dotted_mac_at(bytes, start) {
+        Some(start + 14)
+    } else if is_compact_mac_at(bytes, start) {
+        Some(start + 12)
+    } else {
+        None
+    }
+}
+
+/// 替换常见冒号、连字符、点号和紧凑格式的 MAC 地址。
 fn redact_mac_addresses(input: &str) -> String {
-    const MAC_LENGTH: usize = 17;
     let bytes = input.as_bytes();
     let mut result = String::with_capacity(input.len());
     let mut last = 0;
     let mut index = 0;
 
-    while index + MAC_LENGTH <= bytes.len() {
-        if is_mac_at(bytes, index) {
+    while index < bytes.len() {
+        if let Some(end) = mac_end_at(bytes, index) {
             result.push_str(&input[last..index]);
             result.push_str("<MAC_ADDRESS>");
-            index += MAC_LENGTH;
-            last = index;
+            last = end;
+            index = end;
         } else {
             index += 1;
         }
@@ -306,7 +394,11 @@ fn ipv4_end(bytes: &[u8], start: usize) -> Option<usize> {
         }
     }
 
-    if cursor < bytes.len() && (bytes[cursor].is_ascii_digit() || bytes[cursor] == b'.') {
+    if cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+        return None;
+    }
+    // 允许句末句点，但连续的点号数字仍属于更长的地址内容。
+    if cursor + 1 < bytes.len() && bytes[cursor] == b'.' && bytes[cursor + 1].is_ascii_digit() {
         return None;
     }
     Some(cursor)
@@ -368,6 +460,22 @@ fn is_ipv6_literal(candidate: &str) -> bool {
     address.contains(':') && address.parse::<Ipv6Addr>().is_ok()
 }
 
+fn ipv6_literal_end(input: &str, start: usize, candidate_end: usize) -> Option<usize> {
+    if is_ipv6_literal(&input[start..candidate_end]) {
+        return Some(candidate_end);
+    }
+
+    // 候选片段会包含句末句点；解析时去掉一个句点，输出仍保留它。
+    if candidate_end > start
+        && input.as_bytes()[candidate_end - 1] == b'.'
+        && is_ipv6_literal(&input[start..candidate_end - 1])
+    {
+        Some(candidate_end - 1)
+    } else {
+        None
+    }
+}
+
 /// 使用标准库解析 IPv6 候选片段，避免用宽松字符串替换误伤普通文本。
 fn redact_ipv6_addresses(input: &str) -> String {
     let bytes = input.as_bytes();
@@ -377,15 +485,15 @@ fn redact_ipv6_addresses(input: &str) -> String {
 
     while index < bytes.len() {
         if is_ipv6_candidate_byte(bytes[index]) {
-            let end = ipv6_candidate_end(bytes, index);
-            if end > index && is_ipv6_literal(&input[index..end]) {
+            let candidate_end = ipv6_candidate_end(bytes, index);
+            if let Some(literal_end) = ipv6_literal_end(input, index, candidate_end) {
                 result.push_str(&input[last..index]);
                 result.push_str("<IP_ADDRESS>");
-                last = end;
-                index = end;
+                last = literal_end;
+                index = literal_end;
                 continue;
             }
-            index = end.max(index + 1);
+            index = candidate_end.max(index + 1);
         } else {
             index += 1;
         }
@@ -434,6 +542,62 @@ mod tests {
         assert_eq!(value["MAC-ADDRESS"], "<REDACTED>");
         assert!(value["serialNumber"]["value"].is_null());
         assert_eq!(value["ordinary_name"], "Example GPU");
+    }
+
+    #[test]
+    fn incomplete_sensitive_objects_redact_every_nested_value() {
+        let raw = r#"{"secret":{"value":"x","payload":"leak","nested":{"data":"still-leak"}}}"#;
+        let value: serde_json::Value = serde_json::from_str(&sanitize_report_json(raw)).unwrap();
+
+        assert_eq!(value["secret"]["value"], "<REDACTED>");
+        assert_eq!(value["secret"]["payload"], "<REDACTED>");
+        assert_eq!(value["secret"]["nested"]["data"], "<REDACTED>");
+        assert!(!value.to_string().contains("leak"));
+    }
+
+    #[test]
+    fn sentence_final_ip_periods_are_redacted_without_losing_punctuation() {
+        let raw = r#"{"note":"IPv4 192.0.2.10. IPv6 2001:db8::1."}"#;
+        let value: serde_json::Value = serde_json::from_str(&sanitize_report_json(raw)).unwrap();
+
+        assert_eq!(value["note"], "IPv4 <IP_ADDRESS>. IPv6 <IP_ADDRESS>.");
+    }
+
+    #[test]
+    fn dotted_and_compact_mac_addresses_are_redacted_with_conservative_boundaries() {
+        let raw =
+            r#"{"note":"dotted aabb.ccdd.eeff compact aabbccddeeff embedded xaabbccddeeffy"}"#;
+        let value: serde_json::Value = serde_json::from_str(&sanitize_report_json(raw)).unwrap();
+
+        assert_eq!(
+            value["note"],
+            "dotted <MAC_ADDRESS> compact <MAC_ADDRESS> embedded xaabbccddeeffy"
+        );
+    }
+
+    #[test]
+    fn unicode_identity_names_match_case_insensitively_without_changing_other_values() {
+        let previous_username = std::env::var_os("USERNAME");
+        let previous_computer_name = std::env::var_os("COMPUTERNAME");
+        std::env::set_var("USERNAME", "Müller");
+        std::env::set_var("COMPUTERNAME", "Étage");
+
+        let raw = r#"{"note":"user mÜLLER on éTAGE","ordinary":{"name":"Example CPU","count":3}}"#;
+        let sanitized = sanitize_report_json(raw);
+
+        match previous_username {
+            Some(value) => std::env::set_var("USERNAME", value),
+            None => std::env::remove_var("USERNAME"),
+        }
+        match previous_computer_name {
+            Some(value) => std::env::set_var("COMPUTERNAME", value),
+            None => std::env::remove_var("COMPUTERNAME"),
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(value["note"], "user <USER> on <COMPUTER_NAME>");
+        assert_eq!(value["ordinary"]["name"], "Example CPU");
+        assert_eq!(value["ordinary"]["count"], 3);
     }
 
     #[test]
