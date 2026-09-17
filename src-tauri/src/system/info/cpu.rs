@@ -283,6 +283,18 @@ fn add_feature(features: &mut Vec<String>, feature: &str) {
     features.push(feature.to_string());
 }
 
+/// 判断依赖 AVX 状态的 CPUID 特征是否可安全使用。
+///
+/// FMA3 和 F16C 还要求 AVX 硬件位、OSXSAVE 与 XCR0[2:1] 状态均可用。
+fn avx_dependent_feature_usable(
+    hardware_feature_supported: bool,
+    avx_supported: bool,
+    osxsave: bool,
+    avx_state_usable: bool,
+) -> bool {
+    hardware_feature_supported && avx_supported && osxsave && avx_state_usable
+}
+
 /// 执行 CPUID 并解析真实厂商、型号、品牌、特征与硬件虚拟化位。
 fn query_cpuid_features() -> Result<CpuidInfo, MetricQuality> {
     #[cfg(target_arch = "x86_64")]
@@ -313,6 +325,7 @@ fn query_cpuid_features() -> Result<CpuidInfo, MetricQuality> {
 
         let osxsave = (leaf1.ecx & (1 << 27)) != 0;
         let xcr0 = read_xcr0_if_supported(osxsave);
+        let avx_supported = (leaf1.ecx & (1 << 28)) != 0;
         let avx_state_usable = (xcr0 & 0x06) == 0x06;
         let avx512_state_usable = (xcr0 & 0xe6) == 0xe6;
         let mut features = Vec::new();
@@ -335,7 +348,12 @@ fn query_cpuid_features() -> Result<CpuidInfo, MetricQuality> {
         if (leaf1.ecx & (1 << 9)) != 0 {
             add_feature(&mut features, "SSSE3");
         }
-        if (leaf1.ecx & (1 << 12)) != 0 {
+        if avx_dependent_feature_usable(
+            (leaf1.ecx & (1 << 12)) != 0,
+            avx_supported,
+            osxsave,
+            avx_state_usable,
+        ) {
             add_feature(&mut features, "FMA3");
         }
         if (leaf1.ecx & (1 << 19)) != 0 {
@@ -353,10 +371,15 @@ fn query_cpuid_features() -> Result<CpuidInfo, MetricQuality> {
         if osxsave {
             add_feature(&mut features, "OSXSAVE");
         }
-        if (leaf1.ecx & (1 << 28)) != 0 && avx_state_usable {
+        if avx_supported && avx_state_usable {
             add_feature(&mut features, "AVX");
         }
-        if (leaf1.ecx & (1 << 29)) != 0 {
+        if avx_dependent_feature_usable(
+            (leaf1.ecx & (1 << 29)) != 0,
+            avx_supported,
+            osxsave,
+            avx_state_usable,
+        ) {
             add_feature(&mut features, "F16C");
         }
         if (leaf1.ecx & (1 << 30)) != 0 {
@@ -956,6 +979,15 @@ pub fn collect_cpu_runtime_info() -> CpuRuntimeInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn avx_dependent_features_require_hardware_and_os_state() {
+        assert!(avx_dependent_feature_usable(true, true, true, true));
+        assert!(!avx_dependent_feature_usable(false, true, true, true));
+        assert!(!avx_dependent_feature_usable(true, false, true, true));
+        assert!(!avx_dependent_feature_usable(true, true, false, true));
+        assert!(!avx_dependent_feature_usable(true, true, true, false));
+    }
 
     #[test]
     fn cpu_counter_reset_returns_no_percentage() {
