@@ -3,6 +3,10 @@
 //! 采用原生 Win32 API (`GetPerformanceInfo`, `GlobalMemoryStatusEx`, `GetSystemTimes`, `GetIfTable2` 等)
 //! 毫秒级采集 CPU、内存、磁盘分区、网络吞吐与 GPU 深度运行状态。
 
+use crate::system::info::network::calculate_rate;
+use crate::system::info::quality::{
+    classify_win32_error, current_timestamp_ms, MetricQuality, MetricValue,
+};
 use crate::system::memory::get_memory_info;
 use crate::system::types::MemoryStatus;
 use serde::{Deserialize, Serialize};
@@ -49,13 +53,13 @@ pub struct NetworkSpeedInfo {
     /// 主网卡适配器名称 (如 "Intel(R) Wi-Fi 6 AX201" 或 "Realtek PCIe GbE Family Controller")
     pub adapter_name: String,
     /// 当前瞬时接收/下行速度 (字节/秒)
-    pub rx_speed_bps: u64,
+    pub rx_speed_bps: MetricValue<u64>,
     /// 当前瞬时发送/上行速度 (字节/秒)
-    pub tx_speed_bps: u64,
+    pub tx_speed_bps: MetricValue<u64>,
     /// 累计接收总字节数
-    pub total_rx_bytes: u64,
+    pub total_rx_bytes: MetricValue<u64>,
     /// 累计发送总字节数
-    pub total_tx_bytes: u64,
+    pub total_tx_bytes: MetricValue<u64>,
 }
 
 /// CPU 详细硬件与调度指标 (对标任务管理器 CPU 选项卡)
@@ -171,10 +175,7 @@ fn query_cpu_brand_name() -> String {
 
         if query_res == 0 {
             let len = (data_len / 2) as usize;
-            let end = buffer[..len]
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(len);
+            let end = buffer[..len].iter().position(|&c| c == 0).unwrap_or(len);
             let s = String::from_utf16_lossy(&buffer[..end]);
             let trimmed = s.trim();
             if !trimmed.is_empty() {
@@ -235,7 +236,9 @@ fn query_gpu_name() -> String {
                 .iter()
                 .position(|&c| c == 0)
                 .unwrap_or(dev.DeviceString.len());
-            let name = String::from_utf16_lossy(&dev.DeviceString[..name_len]).trim().to_string();
+            let name = String::from_utf16_lossy(&dev.DeviceString[..name_len])
+                .trim()
+                .to_string();
 
             if !name.is_empty() && !name.contains("Rdp") && !name.contains("Basic Render") {
                 return name;
@@ -294,7 +297,10 @@ fn query_disk_partitions() -> Vec<DiskInfo> {
             }
 
             let drive_path = String::from_utf16_lossy(drive_slice);
-            let drive_wide: Vec<u16> = drive_path.encode_utf16().chain(std::iter::once(0)).collect();
+            let drive_wide: Vec<u16> = drive_path
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let mut free_bytes_available: u64 = 0;
             let mut total_number_of_bytes: u64 = 0;
@@ -305,7 +311,8 @@ fn query_disk_partitions() -> Vec<DiskInfo> {
                 &mut free_bytes_available,
                 &mut total_number_of_bytes,
                 &mut total_number_of_free_bytes,
-            ) != 0 && total_number_of_bytes > 0
+            ) != 0
+                && total_number_of_bytes > 0
             {
                 let mut vol_name = [0u16; 256];
                 let mut fs_name = [0u16; 256];
@@ -321,10 +328,20 @@ fn query_disk_partitions() -> Vec<DiskInfo> {
                     fs_name.len() as u32,
                 );
 
-                let label_end = vol_name.iter().position(|&c| c == 0).unwrap_or(vol_name.len());
-                let raw_label = String::from_utf16_lossy(&vol_name[..label_end]).trim().to_string();
-                let fs_end = fs_name.iter().position(|&c| c == 0).unwrap_or(fs_name.len());
-                let file_system = String::from_utf16_lossy(&fs_name[..fs_end]).trim().to_string();
+                let label_end = vol_name
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(vol_name.len());
+                let raw_label = String::from_utf16_lossy(&vol_name[..label_end])
+                    .trim()
+                    .to_string();
+                let fs_end = fs_name
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(fs_name.len());
+                let file_system = String::from_utf16_lossy(&fs_name[..fs_end])
+                    .trim()
+                    .to_string();
 
                 let letter = drive_path.trim_end_matches('\\').to_string();
                 let is_system_drive = letter.eq_ignore_ascii_case("C:");
@@ -349,7 +366,11 @@ fn query_disk_partitions() -> Vec<DiskInfo> {
                 disks.push(DiskInfo {
                     letter,
                     label,
-                    file_system: if file_system.is_empty() { "NTFS".to_string() } else { file_system },
+                    file_system: if file_system.is_empty() {
+                        "NTFS".to_string()
+                    } else {
+                        file_system
+                    },
                     total_bytes: total_number_of_bytes,
                     available_bytes: free_bytes_available,
                     used_bytes,
@@ -363,59 +384,183 @@ fn query_disk_partitions() -> Vec<DiskInfo> {
     disks
 }
 
-/// 采集网络累计收发字节与当前瞬时收发速率 (B/s)
+fn missing_network_metric_at<T>(
+    unit: &str,
+    source: &str,
+    quality: MetricQuality,
+    reason: &str,
+    timestamp: u64,
+) -> MetricValue<T> {
+    match quality {
+        MetricQuality::Unsupported => MetricValue::unsupported_at(unit, source, reason, timestamp),
+        MetricQuality::Unavailable => MetricValue::unavailable_at(unit, source, reason, timestamp),
+        MetricQuality::PermissionDenied => {
+            MetricValue::permission_denied_at(unit, source, reason, timestamp)
+        }
+        MetricQuality::DriverMissing => {
+            MetricValue::driver_missing_at(unit, source, reason, timestamp)
+        }
+        MetricQuality::ApiUnavailable => {
+            MetricValue::api_unavailable_at(unit, source, reason, timestamp)
+        }
+        MetricQuality::ReadError => MetricValue::read_error_at(unit, source, reason, timestamp),
+        MetricQuality::Invalid => MetricValue::invalid_at(unit, source, reason, timestamp),
+        MetricQuality::Good
+        | MetricQuality::Estimated
+        | MetricQuality::Stale
+        | MetricQuality::Unknown => MetricValue::read_error_at(unit, source, reason, timestamp),
+    }
+}
+
+fn network_rate_metric(
+    previous_total: Option<u64>,
+    current_total: u64,
+    elapsed_seconds: f64,
+    timestamp: u64,
+) -> MetricValue<u64> {
+    if let Some(rate) = calculate_rate(previous_total, current_total, elapsed_seconds) {
+        return MetricValue::good_at(rate, "Bytes/s", "IP_Helper_GetIfTable2", timestamp);
+    }
+
+    let (quality, reason) = match previous_total {
+        None => (
+            MetricQuality::Unsupported,
+            "首次采样没有前一累计值，无法计算速率",
+        ),
+        Some(previous) if current_total < previous => {
+            (MetricQuality::Invalid, "累计计数器回退，无法计算速率")
+        }
+        Some(_) if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 => {
+            (MetricQuality::Invalid, "采样间隔无效，无法计算速率")
+        }
+        Some(_) => (MetricQuality::Invalid, "速率超出可表示范围"),
+    };
+    missing_network_metric_at(
+        "Bytes/s",
+        "IP_Helper_GetIfTable2",
+        quality,
+        reason,
+        timestamp,
+    )
+}
+
+/// 采集网络累计收发字节与当前瞬时收发速率 (B/s)。
 fn query_network_speed() -> NetworkSpeedInfo {
-    let mut total_rx = 0u64;
-    let mut total_tx = 0u64;
-    let mut primary_adapter = "以太网 / Wi-Fi".to_string();
-
-    unsafe {
+    let timestamp = current_timestamp_ms();
+    let source = "IP_Helper_GetIfTable2";
+    let (total_rx, total_tx, primary_adapter) = unsafe {
         let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
-        if GetIfTable2(&mut table) == 0 && !table.is_null() {
-            let num_entries = (*table).NumEntries as usize;
-            let rows_ptr = (*table).Table.as_ptr();
+        let result = GetIfTable2(&mut table);
+        if result != 0 || table.is_null() {
+            if !table.is_null() {
+                FreeMibTable(table as *const _);
+            }
+            let quality = if result == 0 {
+                MetricQuality::Invalid
+            } else {
+                classify_win32_error(result)
+            };
+            return NetworkSpeedInfo {
+                adapter_name: String::new(),
+                rx_speed_bps: missing_network_metric_at(
+                    "Bytes/s",
+                    source,
+                    quality,
+                    "GetIfTable2 失败，无法读取网络速率",
+                    timestamp,
+                ),
+                tx_speed_bps: missing_network_metric_at(
+                    "Bytes/s",
+                    source,
+                    quality,
+                    "GetIfTable2 失败，无法读取网络速率",
+                    timestamp,
+                ),
+                total_rx_bytes: missing_network_metric_at(
+                    "Bytes",
+                    source,
+                    quality,
+                    "GetIfTable2 失败，无法读取累计接收字节",
+                    timestamp,
+                ),
+                total_tx_bytes: missing_network_metric_at(
+                    "Bytes",
+                    source,
+                    quality,
+                    "GetIfTable2 失败，无法读取累计发送字节",
+                    timestamp,
+                ),
+            };
+        }
 
-            for i in 0..num_entries {
-                let row = &*rows_ptr.add(i);
-                if row.Type != 24 && row.OperStatus == 1 {
-                    total_rx += row.InOctets;
-                    total_tx += row.OutOctets;
+        let mut total_rx = 0u64;
+        let mut total_tx = 0u64;
+        let mut primary_adapter = String::new();
+        let num_entries = (*table).NumEntries as usize;
+        let rows_ptr = (*table).Table.as_ptr();
 
-                    if primary_adapter == "以太网 / Wi-Fi" {
-                        let desc_end = row.Description.iter().position(|&c| c == 0).unwrap_or(row.Description.len());
-                        let desc = String::from_utf16_lossy(&row.Description[..desc_end]).trim().to_string();
-                        if !desc.is_empty() {
-                            primary_adapter = desc;
-                        }
+        for index in 0..num_entries {
+            let row = &*rows_ptr.add(index);
+            if row.Type != 24 && row.OperStatus == 1 {
+                total_rx = total_rx.saturating_add(row.InOctets);
+                total_tx = total_tx.saturating_add(row.OutOctets);
+
+                if primary_adapter.is_empty() {
+                    let description_end = row
+                        .Description
+                        .iter()
+                        .position(|&value| value == 0)
+                        .unwrap_or(row.Description.len());
+                    let description = String::from_utf16_lossy(&row.Description[..description_end])
+                        .trim()
+                        .to_string();
+                    if !description.is_empty() {
+                        primary_adapter = description;
+                    } else {
+                        let alias_end = row
+                            .Alias
+                            .iter()
+                            .position(|&value| value == 0)
+                            .unwrap_or(row.Alias.len());
+                        primary_adapter = String::from_utf16_lossy(&row.Alias[..alias_end])
+                            .trim()
+                            .to_string();
                     }
                 }
             }
-            FreeMibTable(table as *const _);
         }
-    }
+        FreeMibTable(table as *const _);
+        (total_rx, total_tx, primary_adapter)
+    };
 
     let now = Instant::now();
-    let mut rx_speed = 0u64;
-    let mut tx_speed = 0u64;
-
-    let mut net_guard = PREV_NET_TIMES.lock().unwrap();
-    if let Some((prev_time, prev_rx, prev_tx)) = *net_guard {
-        let elapsed = now.duration_since(prev_time).as_secs_f64();
-        if elapsed > 0.1 {
-            rx_speed = ((total_rx.saturating_sub(prev_rx)) as f64 / elapsed) as u64;
-            tx_speed = ((total_tx.saturating_sub(prev_tx)) as f64 / elapsed) as u64;
-        }
-        *net_guard = Some((now, total_rx, total_tx));
-    } else {
-        *net_guard = Some((now, total_rx, total_tx));
-    }
+    let mut net_guard = PREV_NET_TIMES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = *net_guard;
+    *net_guard = Some((now, total_rx, total_tx));
+    let (previous_rx, previous_tx, elapsed) = match previous {
+        Some((previous_time, previous_rx, previous_tx)) => (
+            Some(previous_rx),
+            Some(previous_tx),
+            previous_time
+                .checked_duration_since(now)
+                .map(|_| -1.0)
+                .or_else(|| {
+                    now.checked_duration_since(previous_time)
+                        .map(|d| d.as_secs_f64())
+                })
+                .unwrap_or(-1.0),
+        ),
+        None => (None, None, -1.0),
+    };
 
     NetworkSpeedInfo {
         adapter_name: primary_adapter,
-        rx_speed_bps: rx_speed,
-        tx_speed_bps: tx_speed,
-        total_rx_bytes: total_rx,
-        total_tx_bytes: total_tx,
+        rx_speed_bps: network_rate_metric(previous_rx, total_rx, elapsed, timestamp),
+        tx_speed_bps: network_rate_metric(previous_tx, total_tx, elapsed, timestamp),
+        total_rx_bytes: MetricValue::good_at(total_rx, "Bytes", source, timestamp),
+        total_tx_bytes: MetricValue::good_at(total_tx, "Bytes", source, timestamp),
     }
 }
 
@@ -433,7 +578,15 @@ pub fn get_hardware_performance() -> Result<HardwarePerformance, String> {
     let mut perf_info: PERFORMANCE_INFORMATION = unsafe { std::mem::zeroed() };
     perf_info.cb = size_of::<PERFORMANCE_INFORMATION>() as u32;
 
-    let (proc_count, thread_count, handle_count, commit_total_bytes, commit_limit_bytes, paged_pool_bytes, non_paged_pool_bytes) = unsafe {
+    let (
+        proc_count,
+        thread_count,
+        handle_count,
+        commit_total_bytes,
+        commit_limit_bytes,
+        paged_pool_bytes,
+        non_paged_pool_bytes,
+    ) = unsafe {
         if GetPerformanceInfo(&mut perf_info, size_of::<PERFORMANCE_INFORMATION>() as u32) != 0 {
             let page_size = perf_info.PageSize as u64;
             (
@@ -446,7 +599,15 @@ pub fn get_hardware_performance() -> Result<HardwarePerformance, String> {
                 perf_info.KernelNonpaged as u64 * page_size,
             )
         } else {
-            (250, 3200, 110000, memory.used_ram, memory.total_ram, 600 * 1024 * 1024, 400 * 1024 * 1024)
+            (
+                250,
+                3200,
+                110000,
+                memory.used_ram,
+                memory.total_ram,
+                600 * 1024 * 1024,
+                400 * 1024 * 1024,
+            )
         }
     };
 
