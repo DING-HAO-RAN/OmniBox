@@ -1,16 +1,35 @@
 //! 计算机整机、主板、BIOS 与 Windows 操作系统信息采集模块
 //!
-//! 优先使用 Win32 原生 API (`GetComputerNameExW`, `GetTickCount64`, Windows Version API)
-//! 与注册表 (`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`, `HARDWARE\DESCRIPTION\System\BIOS`)。
+//! 优先使用 Win32 原生 API 与注册表读取真实系统值；无法读取时保留空值和质量状态。
 
-use super::quality::MetricValue;
+use super::quality::{current_timestamp_ms, MetricValue};
 use serde::{Deserialize, Serialize};
+use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
 use windows_sys::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD,
+    REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE,
 };
 use windows_sys::Win32::System::SystemInformation::{
-    GetComputerNameExW, GetTickCount64, COMPUTER_NAME_FORMAT,
+    ComputerNameDnsDomain, ComputerNameDnsHostname, ComputerNameNetBIOS,
+    FirmwareTypeBios as FIRMWARE_TYPE_BIOS, FirmwareTypeUefi as FIRMWARE_TYPE_UEFI,
+    FirmwareTypeUnknown as FIRMWARE_TYPE_UNKNOWN, GetComputerNameExW, GetFirmwareType,
+    GetNativeSystemInfo, GetSystemDirectoryW, GetTickCount64, GetWindowsDirectoryW,
+    COMPUTER_NAME_FORMAT, PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_ARCHITECTURE_ARM,
+    PROCESSOR_ARCHITECTURE_ARM64, PROCESSOR_ARCHITECTURE_IA64, PROCESSOR_ARCHITECTURE_INTEL,
+    PROCESSOR_ARCHITECTURE_UNKNOWN, SYSTEM_INFO,
 };
+use windows_sys::Win32::System::SystemServices::TIME_ZONE_ID_DAYLIGHT;
+use windows_sys::Win32::System::Time::{
+    GetDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION, TIME_ZONE_ID_INVALID,
+};
+use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+
+#[cfg(test)]
+use super::quality::MetricQuality;
+
+const MAX_REGISTRY_DATA_BYTES: usize = 64 * 1024;
+const MAX_API_STRING_CHARS: u32 = 64 * 1024;
+const INITIAL_API_STRING_CHARS: u32 = 64;
 
 /// 计算机整机身份与硬件概览
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -67,7 +86,8 @@ pub struct WindowsOsInfo {
     pub timezone: MetricValue<String>,
 }
 
-fn read_reg_string(hkey: HKEY, subkey: &str, val_name: &str) -> Option<String> {
+/// 查询注册表原始值，先取得类型和长度，再按实际长度分配缓冲。
+fn query_reg_value(hkey: HKEY, subkey: &str, val_name: &str) -> Option<(REG_VALUE_TYPE, Vec<u8>)> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
     let val_wide: Vec<u16> = val_name.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -77,74 +97,273 @@ fn read_reg_string(hkey: HKEY, subkey: &str, val_name: &str) -> Option<String> {
             return None;
         }
 
-        let mut buffer = [0u16; 512];
-        let mut data_len = (buffer.len() * 2) as u32;
-        let query_res = RegQueryValueExW(
-            key,
-            val_wide.as_ptr(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            buffer.as_mut_ptr() as *mut u8,
-            &mut data_len,
-        );
-        RegCloseKey(key);
-
-        if query_res == 0 {
-            let len = (data_len / 2) as usize;
-            let end = buffer[..len].iter().position(|&c| c == 0).unwrap_or(len);
-            let s = String::from_utf16_lossy(&buffer[..end]).trim().to_string();
-            if !s.is_empty() {
-                return Some(s);
+        let result = (|| {
+            let mut data_type: REG_VALUE_TYPE = 0;
+            let mut data_len = 0u32;
+            if RegQueryValueExW(
+                key,
+                val_wide.as_ptr(),
+                std::ptr::null(),
+                &mut data_type,
+                std::ptr::null_mut(),
+                &mut data_len,
+            ) != 0
+                || data_len as usize > MAX_REGISTRY_DATA_BYTES
+            {
+                return None;
             }
-        }
+
+            let mut data = vec![0u8; data_len as usize];
+            let data_ptr = if data.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                data.as_mut_ptr()
+            };
+            let mut returned_len = data_len;
+            if RegQueryValueExW(
+                key,
+                val_wide.as_ptr(),
+                std::ptr::null(),
+                &mut data_type,
+                data_ptr,
+                &mut returned_len,
+            ) != 0
+                || returned_len as usize > data.len()
+            {
+                return None;
+            }
+            data.truncate(returned_len as usize);
+            Some((data_type, data))
+        })();
+
+        RegCloseKey(key);
+        result
     }
-    None
+}
+
+/// 将注册表 UTF-16LE 数据转换为非空字符串，并按返回长度处理 NUL。
+fn decode_registry_string(data: &[u8]) -> Option<String> {
+    if data.len() % 2 != 0 {
+        return None;
+    }
+
+    let utf16: Vec<u16> = data
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let end = utf16
+        .iter()
+        .position(|&value| value == 0)
+        .unwrap_or(utf16.len());
+    let value = String::from_utf16_lossy(&utf16[..end]).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn read_reg_string(hkey: HKEY, subkey: &str, val_name: &str) -> Option<String> {
+    let (data_type, data) = query_reg_value(hkey, subkey, val_name)?;
+    if data_type != REG_SZ && data_type != REG_EXPAND_SZ {
+        return None;
+    }
+    decode_registry_string(&data)
 }
 
 fn read_reg_dword(hkey: HKEY, subkey: &str, val_name: &str) -> Option<u32> {
-    let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let val_wide: Vec<u16> = val_name.encode_utf16().chain(std::iter::once(0)).collect();
-
-    unsafe {
-        let mut key: HKEY = std::ptr::null_mut();
-        if RegOpenKeyExW(hkey, subkey_wide.as_ptr(), 0, KEY_READ, &mut key) != 0 {
-            return None;
-        }
-
-        let mut data_type = 0u32;
-        let mut val = 0u32;
-        let mut data_len = 4u32;
-        let query_res = RegQueryValueExW(
-            key,
-            val_wide.as_ptr(),
-            std::ptr::null_mut(),
-            &mut data_type,
-            &mut val as *mut _ as *mut u8,
-            &mut data_len,
-        );
-        RegCloseKey(key);
-
-        if query_res == 0 {
-            return Some(val);
-        }
+    let (data_type, data) = query_reg_value(hkey, subkey, val_name)?;
+    if data_type != REG_DWORD || data.len() != std::mem::size_of::<u32>() {
+        return None;
     }
-    None
+    Some(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
 }
 
-fn get_comp_name(format: COMPUTER_NAME_FORMAT) -> Option<String> {
-    let mut buffer = [0u16; 256];
-    let mut size = buffer.len() as u32;
-    unsafe {
-        if GetComputerNameExW(format, buffer.as_mut_ptr(), &mut size) != 0 {
-            let len = size as usize;
-            let end = buffer[..len].iter().position(|&c| c == 0).unwrap_or(len);
-            let s = String::from_utf16_lossy(&buffer[..end]).trim().to_string();
-            if !s.is_empty() {
-                return Some(s);
+/// 根据 Win32 返回的需求长度扩大缓冲，防止固定长度截断。
+fn grow_api_buffer(reported_size: u32, current_size: u32) -> Option<u32> {
+    let next_size = if reported_size > current_size {
+        reported_size.saturating_add(1)
+    } else {
+        current_size.saturating_mul(2)
+    };
+    if next_size <= current_size || next_size > MAX_API_STRING_CHARS {
+        None
+    } else {
+        Some(next_size)
+    }
+}
+
+fn decode_wide_buffer(buffer: &[u16], reported_len: usize) -> Option<String> {
+    if reported_len > buffer.len() {
+        return None;
+    }
+    let end = buffer[..reported_len]
+        .iter()
+        .position(|&value| value == 0)
+        .unwrap_or(reported_len);
+    let value = String::from_utf16_lossy(&buffer[..end]).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn get_comp_name(name_format: COMPUTER_NAME_FORMAT) -> Option<String> {
+    let mut capacity = INITIAL_API_STRING_CHARS;
+    loop {
+        let mut buffer = vec![0u16; capacity as usize];
+        let mut size = capacity;
+        let succeeded =
+            unsafe { GetComputerNameExW(name_format, buffer.as_mut_ptr(), &mut size) } != 0;
+        if succeeded {
+            return decode_wide_buffer(&buffer, size as usize);
+        }
+        capacity = grow_api_buffer(size, capacity)?;
+    }
+}
+
+/// 通过 Windows 身份 API 获取当前用户名，不读取可伪造的环境变量。
+fn get_current_user() -> Option<String> {
+    let mut capacity = INITIAL_API_STRING_CHARS;
+    loop {
+        let mut buffer = vec![0u16; capacity as usize];
+        let mut size = capacity;
+        let succeeded = unsafe { GetUserNameW(buffer.as_mut_ptr(), &mut size) } != 0;
+        if succeeded {
+            return decode_wide_buffer(&buffer, size as usize);
+        }
+        capacity = grow_api_buffer(size, capacity)?;
+    }
+}
+
+fn get_directory(windows_directory: bool) -> Option<String> {
+    let mut capacity = 260u32;
+    loop {
+        let mut buffer = vec![0u16; capacity as usize];
+        let returned_len = unsafe {
+            if windows_directory {
+                GetWindowsDirectoryW(buffer.as_mut_ptr(), capacity)
+            } else {
+                GetSystemDirectoryW(buffer.as_mut_ptr(), capacity)
             }
+        };
+        if returned_len == 0 {
+            return None;
+        }
+        if returned_len < capacity {
+            return decode_wide_buffer(&buffer, returned_len as usize);
+        }
+        capacity = grow_api_buffer(returned_len, capacity)?;
+    }
+}
+
+fn get_locale_name() -> Option<String> {
+    let mut capacity = INITIAL_API_STRING_CHARS;
+    loop {
+        let mut buffer = vec![0u16; capacity as usize];
+        let returned_len =
+            unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), capacity as i32) };
+        if returned_len == 0 {
+            return None;
+        }
+        let reported_len = returned_len as usize;
+        if reported_len <= buffer.len() {
+            return decode_wide_buffer(&buffer, reported_len);
+        }
+        capacity = grow_api_buffer(returned_len as u32, capacity)?;
+    }
+}
+
+fn get_timezone_name() -> Option<String> {
+    let mut info: DYNAMIC_TIME_ZONE_INFORMATION = unsafe { std::mem::zeroed() };
+    let state = unsafe { GetDynamicTimeZoneInformation(&mut info) };
+    if state == TIME_ZONE_ID_INVALID {
+        return None;
+    }
+
+    let name = decode_wide_buffer(&info.TimeZoneKeyName, info.TimeZoneKeyName.len())
+        .or_else(|| decode_wide_buffer(&info.DaylightName, info.DaylightName.len()))
+        .or_else(|| decode_wide_buffer(&info.StandardName, info.StandardName.len()))?;
+    let active_bias = if state == TIME_ZONE_ID_DAYLIGHT {
+        info.DaylightBias
+    } else {
+        info.StandardBias
+    };
+    let offset_minutes = -(info.Bias + active_bias);
+    let sign = if offset_minutes < 0 { '-' } else { '+' };
+    let absolute_minutes = if offset_minutes < 0 {
+        (-offset_minutes) as u32
+    } else {
+        offset_minutes as u32
+    };
+    Some(format!(
+        "{name} (UTC{sign}{:02}:{:02})",
+        absolute_minutes / 60,
+        absolute_minutes % 60
+    ))
+}
+
+fn native_architecture_name() -> Option<String> {
+    let mut system_info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
+    unsafe { GetNativeSystemInfo(&mut system_info) };
+    let architecture = unsafe { system_info.Anonymous.Anonymous.wProcessorArchitecture };
+    let name = match architecture {
+        PROCESSOR_ARCHITECTURE_AMD64 => "x64",
+        PROCESSOR_ARCHITECTURE_INTEL => "x86",
+        PROCESSOR_ARCHITECTURE_ARM => "ARM",
+        PROCESSOR_ARCHITECTURE_ARM64 => "ARM64",
+        PROCESSOR_ARCHITECTURE_IA64 => "IA64",
+        PROCESSOR_ARCHITECTURE_UNKNOWN => return None,
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+fn firmware_mode_name() -> Option<String> {
+    let mut firmware_type = FIRMWARE_TYPE_UNKNOWN;
+    if unsafe { GetFirmwareType(&mut firmware_type) } == 0 {
+        return None;
+    }
+    match firmware_type {
+        FIRMWARE_TYPE_UEFI => Some("UEFI".to_string()),
+        FIRMWARE_TYPE_BIOS => Some("Legacy BIOS".to_string()),
+        _ => None,
+    }
+}
+
+fn system_drive_from_directory(directory: Option<&String>) -> Option<String> {
+    let path = directory?;
+    let prefix = path.get(..2)?;
+    (prefix.as_bytes().get(1) == Some(&b':')).then(|| prefix.to_string())
+}
+
+fn collection_timestamp() -> u64 {
+    current_timestamp_ms().max(1)
+}
+
+fn metric_from_optional<T>(
+    value: Option<T>,
+    unit: &str,
+    source: &str,
+    timestamp: u64,
+) -> MetricValue<T> {
+    match value {
+        Some(value) => MetricValue::good_at(value, unit, source, timestamp),
+        None => {
+            MetricValue::unavailable_at(unit, source, "Windows API 或注册表未返回该指标", timestamp)
         }
     }
-    None
+}
+
+fn metric_from_optional_string(
+    value: Option<String>,
+    unit: &str,
+    source: &str,
+    timestamp: u64,
+) -> MetricValue<String> {
+    metric_from_optional(
+        value.filter(|value| !value.trim().is_empty()),
+        unit,
+        source,
+        timestamp,
+    )
+}
+
+fn unsupported_string(source: &str, reason: &str, timestamp: u64) -> MetricValue<String> {
+    MetricValue::unsupported_at("", source, reason, timestamp)
 }
 
 /// 格式化开机运行时间
@@ -162,145 +381,261 @@ pub fn format_uptime_string(seconds: u64) -> String {
 
 /// 采集计算机整机信息
 pub fn collect_computer_info() -> ComputerInfo {
-    let hostname_raw = get_comp_name(0).or_else(|| std::env::var("COMPUTERNAME").ok());
-    let dns_hostname_raw = get_comp_name(1);
-    let domain_raw = get_comp_name(2);
-    let current_user_raw = std::env::var("USERNAME").ok();
-
-    let uptime = unsafe { GetTickCount64() / 1000 };
-    let uptime_str = format_uptime_string(uptime);
-
+    let timestamp = collection_timestamp();
     let bios_key = "HARDWARE\\DESCRIPTION\\System\\BIOS";
-    let manufacturer_raw = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemManufacturer");
-    let model_raw = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemProductName");
-    let system_family_raw = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemFamily");
-    let serial_raw = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemSKU");
-
-    let src = "Win32_GetComputerNameEx / Registry_BIOS";
+    let hostname_source = "Win32_GetComputerNameExW";
+    let registry_source = "Registry_HKLM_HARDWARE_BIOS";
+    let hostname = get_comp_name(ComputerNameNetBIOS);
+    let dns_hostname = get_comp_name(ComputerNameDnsHostname);
+    let domain = get_comp_name(ComputerNameDnsDomain);
+    let current_user = get_current_user();
+    let uptime = unsafe { GetTickCount64() / 1000 };
+    let architecture = native_architecture_name();
 
     ComputerInfo {
-        hostname: match hostname_raw {
-            Some(h) => MetricValue::good(h, "", src),
-            None => MetricValue::unavailable("", src, "无法获取主机名"),
-        },
-        dns_hostname: match dns_hostname_raw {
-            Some(d) => MetricValue::good(d, "", src),
-            None => MetricValue::unavailable("", src, "无法获取 DNS 主机名"),
-        },
-        manufacturer: match manufacturer_raw {
-            Some(m) => MetricValue::good(m, "", src),
-            None => MetricValue::good("标准 Windows 计算机 (Generic PC)".to_string(), "", src),
-        },
-        model: match model_raw {
-            Some(m) => MetricValue::good(m, "", src),
-            None => MetricValue::good("系统设备 (System Product)".to_string(), "", src),
-        },
-        system_family: match system_family_raw {
-            Some(f) => MetricValue::good(f, "", src),
-            None => MetricValue::good("PC Desktop/Laptop".to_string(), "", src),
-        },
-        serial_number: match serial_raw {
-            Some(s) => MetricValue::good(s, "", src),
-            None => MetricValue::good("To be filled by O.E.M.".to_string(), "", src),
-        },
-        uuid: MetricValue::good(format!("UUID-{:x}", uptime), "", "Win32_SystemInformation"),
-        domain: match domain_raw {
-            Some(d) if !d.is_empty() => MetricValue::good(d, "", src),
-            _ => MetricValue::good("WORKGROUP (工作组)".to_string(), "", src),
-        },
-        workgroup: MetricValue::good("WORKGROUP".to_string(), "", src),
-        system_type: MetricValue::good("x64-based PC (64位工作站)".to_string(), "", "Win32_Arch"),
-        current_user: match current_user_raw {
-            Some(u) => MetricValue::good(u, "", "Win32_Environment"),
-            None => MetricValue::unavailable("", "Win32_Environment", "无法读取当前用户名"),
-        },
-        uptime_seconds: MetricValue::good(uptime, "秒", "Win32_GetTickCount64"),
-        uptime_formatted: MetricValue::good(uptime_str, "", "Win32_GetTickCount64"),
+        hostname: metric_from_optional_string(hostname, "", hostname_source, timestamp),
+        dns_hostname: metric_from_optional_string(dns_hostname, "", hostname_source, timestamp),
+        manufacturer: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemManufacturer"),
+            "",
+            registry_source,
+            timestamp,
+        ),
+        model: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemProductName"),
+            "",
+            registry_source,
+            timestamp,
+        ),
+        system_family: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemFamily"),
+            "",
+            registry_source,
+            timestamp,
+        ),
+        serial_number: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "SystemSerialNumber"),
+            "",
+            registry_source,
+            timestamp,
+        ),
+        uuid: unsupported_string(
+            "Win32_SystemInformation",
+            "没有可靠且获准的 UUID 来源",
+            timestamp,
+        ),
+        domain: metric_from_optional_string(domain, "", hostname_source, timestamp),
+        workgroup: unsupported_string(
+            hostname_source,
+            "Windows API 未提供可验证的工作组信息",
+            timestamp,
+        ),
+        system_type: metric_from_optional_string(
+            architecture.map(|value| format!("{value}-based PC")),
+            "",
+            "Win32_GetNativeSystemInfo",
+            timestamp,
+        ),
+        current_user: metric_from_optional_string(
+            current_user,
+            "",
+            "Win32_GetUserNameW",
+            timestamp,
+        ),
+        uptime_seconds: MetricValue::good_at(uptime, "秒", "Win32_GetTickCount64", timestamp),
+        uptime_formatted: MetricValue::good_at(
+            format_uptime_string(uptime),
+            "",
+            "Win32_GetTickCount64",
+            timestamp,
+        ),
     }
 }
 
 /// 采集主板与芯片组信息
 pub fn collect_motherboard_info() -> MotherboardInfo {
+    let timestamp = collection_timestamp();
     let bios_key = "HARDWARE\\DESCRIPTION\\System\\BIOS";
-    let manufacturer = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardManufacturer")
-        .unwrap_or_else(|| "Generic Motherboard".to_string());
-    let product = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardProduct")
-        .unwrap_or_else(|| "Base Board".to_string());
-    let version = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardVersion")
-        .unwrap_or_else(|| "1.0".to_string());
-    let serial = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardSerialNumber")
-        .unwrap_or_else(|| "Default string".to_string());
-
-    let src = "Registry_HKLM_HARDWARE_BIOS";
+    let source = "Registry_HKLM_HARDWARE_BIOS";
 
     MotherboardInfo {
-        manufacturer: MetricValue::good(manufacturer, "", src),
-        product: MetricValue::good(product, "", src),
-        version: MetricValue::good(version, "", src),
-        serial_number: MetricValue::good(serial, "", src),
-        chipset: MetricValue::good("Intel / AMD x64 Unified Chipset".to_string(), "", src),
+        manufacturer: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardManufacturer"),
+            "",
+            source,
+            timestamp,
+        ),
+        product: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardProduct"),
+            "",
+            source,
+            timestamp,
+        ),
+        version: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardVersion"),
+            "",
+            source,
+            timestamp,
+        ),
+        serial_number: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BaseBoardSerialNumber"),
+            "",
+            source,
+            timestamp,
+        ),
+        chipset: unsupported_string(source, "当前获准来源无法可靠识别芯片组", timestamp),
     }
 }
 
 /// 采集 BIOS / UEFI 信息
 pub fn collect_bios_info() -> BiosInfo {
+    let timestamp = collection_timestamp();
     let bios_key = "HARDWARE\\DESCRIPTION\\System\\BIOS";
-    let vendor = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BIOSVendor")
-        .unwrap_or_else(|| "American Megatrends / Insyde".to_string());
-    let version = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BIOSVersion")
-        .unwrap_or_else(|| "1.0".to_string());
-    let release_date = read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BIOSReleaseDate")
-        .unwrap_or_else(|| "2024".to_string());
-
-    let smbios_major = read_reg_dword(HKEY_LOCAL_MACHINE, bios_key, "SmbiosMajorVersion").unwrap_or(3);
-    let smbios_minor = read_reg_dword(HKEY_LOCAL_MACHINE, bios_key, "SmbiosMinorVersion").unwrap_or(3);
-    let smbios_version = format!("{smbios_major}.{smbios_minor}");
-
-    // 判断 UEFI 还是 Legacy
-    let firmware_mode = if std::path::Path::new("C:\\Windows\\Panther").exists() {
-        "UEFI (安全引导就绪)".to_string()
-    } else {
-        "UEFI".to_string()
+    let source = "Registry_HKLM_HARDWARE_BIOS";
+    let smbios_version = match (
+        read_reg_dword(HKEY_LOCAL_MACHINE, bios_key, "SmbiosMajorVersion"),
+        read_reg_dword(HKEY_LOCAL_MACHINE, bios_key, "SmbiosMinorVersion"),
+    ) {
+        (Some(major), Some(minor)) => Some(format!("{major}.{minor}")),
+        _ => None,
     };
 
-    let src = "Registry_HKLM_HARDWARE_BIOS";
-
     BiosInfo {
-        vendor: MetricValue::good(vendor, "", src),
-        version: MetricValue::good(version, "", src),
-        release_date: MetricValue::good(release_date, "", src),
-        smbios_version: MetricValue::good(smbios_version, "", src),
-        firmware_mode: MetricValue::good(firmware_mode, "", src),
+        vendor: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BIOSVendor"),
+            "",
+            source,
+            timestamp,
+        ),
+        version: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BIOSVersion"),
+            "",
+            source,
+            timestamp,
+        ),
+        release_date: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, bios_key, "BIOSReleaseDate"),
+            "",
+            source,
+            timestamp,
+        ),
+        smbios_version: metric_from_optional_string(smbios_version, "", source, timestamp),
+        firmware_mode: match firmware_mode_name() {
+            Some(value) => MetricValue::good_at(value, "", "Win32_GetFirmwareType", timestamp),
+            None => unsupported_string(
+                "Win32_GetFirmwareType",
+                "Windows API 未返回已知固件模式",
+                timestamp,
+            ),
+        },
     }
 }
 
 /// 采集 Windows 操作系统信息
 pub fn collect_windows_os_info() -> WindowsOsInfo {
+    let timestamp = collection_timestamp();
     let nt_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
-    let product_name = read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "ProductName")
-        .unwrap_or_else(|| "Windows 11 Pro".to_string());
-    let display_version = read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "DisplayVersion")
-        .unwrap_or_else(|| "23H2".to_string());
-    let current_build = read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "CurrentBuild")
-        .unwrap_or_else(|| "22631".to_string());
-    let ubr = read_reg_dword(HKEY_LOCAL_MACHINE, nt_key, "UBR").unwrap_or(0);
-    let edition_id = read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "EditionID")
-        .unwrap_or_else(|| "Professional".to_string());
-
-    let src = "Registry_HKLM_Windows_NT";
+    let source = "Registry_HKLM_Windows_NT";
+    let current_build = read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "CurrentBuild");
+    let ubr = read_reg_dword(HKEY_LOCAL_MACHINE, nt_key, "UBR");
+    let build_number = current_build.map(|build| match ubr {
+        Some(ubr) => format!("{build}.{ubr}"),
+        None => build,
+    });
+    let windows_directory = get_directory(true);
+    let system_directory = get_directory(false);
 
     WindowsOsInfo {
-        name: MetricValue::good(product_name, "", src),
-        edition: MetricValue::good(edition_id, "", src),
-        display_version: MetricValue::good(display_version, "", src),
-        build_number: MetricValue::good(format!("{current_build}.{ubr}"), "", src),
-        ubr: MetricValue::good(ubr, "", src),
-        architecture: MetricValue::good("x64 (64位操作系统)".to_string(), "", "Win32_SystemArchitecture"),
-        install_date: MetricValue::good("Windows 正常维护中".to_string(), "", src),
-        windows_directory: MetricValue::good("C:\\Windows".to_string(), "", "Win32_GetWindowsDirectory"),
-        system_directory: MetricValue::good("C:\\Windows\\System32".to_string(), "", "Win32_GetSystemDirectory"),
-        system_drive: MetricValue::good("C:".to_string(), "", "Win32_SystemDrive"),
-        locale: MetricValue::good("zh-CN (中文简体)".to_string(), "", "Win32_Locale"),
-        timezone: MetricValue::good("UTC+08:00 (北京时间)".to_string(), "", "Win32_Timezone"),
+        name: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "ProductName"),
+            "",
+            source,
+            timestamp,
+        ),
+        edition: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "EditionID"),
+            "",
+            source,
+            timestamp,
+        ),
+        display_version: metric_from_optional_string(
+            read_reg_string(HKEY_LOCAL_MACHINE, nt_key, "DisplayVersion"),
+            "",
+            source,
+            timestamp,
+        ),
+        build_number: metric_from_optional_string(build_number, "", source, timestamp),
+        ubr: metric_from_optional(ubr, "", source, timestamp),
+        architecture: metric_from_optional_string(
+            native_architecture_name(),
+            "",
+            "Win32_GetNativeSystemInfo",
+            timestamp,
+        ),
+        install_date: metric_from_optional_string(
+            read_reg_dword(HKEY_LOCAL_MACHINE, nt_key, "InstallDate")
+                .map(|seconds| seconds.to_string()),
+            "",
+            source,
+            timestamp,
+        ),
+        windows_directory: metric_from_optional_string(
+            windows_directory.clone(),
+            "",
+            "Win32_GetWindowsDirectoryW",
+            timestamp,
+        ),
+        system_directory: metric_from_optional_string(
+            system_directory,
+            "",
+            "Win32_GetSystemDirectoryW",
+            timestamp,
+        ),
+        system_drive: metric_from_optional_string(
+            system_drive_from_directory(windows_directory.as_ref()),
+            "",
+            "Win32_GetWindowsDirectoryW",
+            timestamp,
+        ),
+        locale: match get_locale_name() {
+            Some(value) => {
+                MetricValue::good_at(value, "", "Win32_GetUserDefaultLocaleName", timestamp)
+            }
+            None => unsupported_string(
+                "Win32_GetUserDefaultLocaleName",
+                "Windows API 不可用或未返回区域设置",
+                timestamp,
+            ),
+        },
+        timezone: match get_timezone_name() {
+            Some(value) => {
+                MetricValue::good_at(value, "", "Win32_GetDynamicTimeZoneInformation", timestamp)
+            }
+            None => unsupported_string(
+                "Win32_GetDynamicTimeZoneInformation",
+                "Windows API 不可用或未返回时区",
+                timestamp,
+            ),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uptime_format_does_not_create_hardware_identity() {
+        assert_eq!(format_uptime_string(90061), "1天 01:01:01");
+        let missing = metric_from_optional_string(None, "", "fixture", 77);
+        assert_eq!(missing.value, None);
+        assert_ne!(missing.quality, MetricQuality::Good);
+    }
+
+    #[test]
+    fn missing_registry_values_are_not_replaced_with_demo_strings() {
+        let result = metric_from_optional_string(None, "", "test", 77);
+        assert_eq!(result.value, None);
+        assert_ne!(result.quality, MetricQuality::Good);
     }
 }
