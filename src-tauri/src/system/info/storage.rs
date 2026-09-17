@@ -327,7 +327,7 @@ fn locate_protocol_data(buffer: &[u8], bytes_returned: usize) -> Result<&[u8], M
         .checked_add(usize::try_from(data_length).map_err(|_| MetricQuality::Invalid)?)
         .ok_or(MetricQuality::Invalid)?;
 
-    if data_start < protocol_end || data_end > bytes_returned {
+    if data_start < protocol_end || data_end > bytes_returned || data_end > descriptor_size {
         return Err(MetricQuality::Invalid);
     }
 
@@ -1171,6 +1171,27 @@ mod tests {
         buffer[8..12].copy_from_slice(&PROTOCOL_TYPE_NVME.to_le_bytes());
         buffer[12..16].copy_from_slice(&NVME_DATA_TYPE_LOG_PAGE.to_le_bytes());
         buffer[24..28].copy_from_slice(&44_u32.to_le_bytes());
+        buffer[28..32].copy_from_slice(&512_u32.to_le_bytes());
+
+        assert_eq!(
+            locate_protocol_data(&buffer, buffer.len()).unwrap_err(),
+            MetricQuality::Invalid
+        );
+    }
+
+    #[test]
+    fn protocol_data_must_fit_declared_descriptor_size() {
+        let data_offset = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>() + size_of::<u32>();
+        let data_start = STORAGE_PROTOCOL_DATA_DESCRIPTOR_HEADER_SIZE + data_offset;
+        let data_end = data_start + NVME_HEALTH_LOG_LEN;
+        // 返回缓冲足够大，但声明 Size 刻意比数据结束位置少 4 字节。
+        let descriptor_size = data_end - size_of::<u32>();
+        let mut buffer = vec![0_u8; data_end];
+        buffer[0..4].copy_from_slice(&60_u32.to_le_bytes());
+        buffer[4..8].copy_from_slice(&(descriptor_size as u32).to_le_bytes());
+        buffer[8..12].copy_from_slice(&PROTOCOL_TYPE_NVME.to_le_bytes());
+        buffer[12..16].copy_from_slice(&NVME_DATA_TYPE_LOG_PAGE.to_le_bytes());
+        buffer[24..28].copy_from_slice(&(data_offset as u32).to_le_bytes());
         buffer[28..32].copy_from_slice(&512_u32.to_le_bytes());
 
         assert_eq!(
