@@ -92,6 +92,31 @@ fn panic_reason(_payload: Box<dyn std::any::Any + Send>) -> String {
     "Provider panic; safe fallback returned".to_string()
 }
 
+pub(crate) fn collect_isolated_with_status<T, F>(
+    source: &str,
+    fallback: T,
+    f: F,
+) -> CollectorResult<T>
+where
+    F: FnOnce() -> CollectorResult<T> + std::panic::UnwindSafe,
+{
+    let timestamp = current_timestamp_ms();
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => CollectorResult {
+            value: fallback,
+            status: CollectionStatus {
+                quality: MetricQuality::ReadError,
+                source: source.to_string(),
+                timestamp,
+                item_count: Some(0),
+                truncated: false,
+                error: Some(panic_reason(payload)),
+            },
+        },
+    }
+}
+
 fn empty_metric<T>(source: &str, timestamp: u64) -> MetricValue<T> {
     MetricValue::read_error_at("", source, "Provider panic fallback", timestamp)
 }
@@ -110,6 +135,38 @@ fn empty_status(source: &str, timestamp: u64) -> CollectionStatus {
 fn set_count(mut status: CollectionStatus, count: usize) -> CollectionStatus {
     status.item_count = Some(u32::try_from(count).unwrap_or(u32::MAX));
     status
+}
+
+/// 构造集合 Provider 状态；Good 只用于真实 API 成功结果。
+pub(crate) fn collection_status_for(
+    source: &str,
+    quality: MetricQuality,
+    item_count: usize,
+    truncated: bool,
+    error: Option<&str>,
+) -> CollectionStatus {
+    let error = if quality == MetricQuality::Good {
+        None
+    } else {
+        Some(
+            error
+                .filter(|message| !message.is_empty())
+                .unwrap_or("Provider collection failed")
+                .to_string(),
+        )
+    };
+    CollectionStatus {
+        quality,
+        source: source.to_string(),
+        timestamp: current_timestamp_ms(),
+        item_count: Some(if quality == MetricQuality::Good {
+            u32::try_from(item_count).unwrap_or(u32::MAX)
+        } else {
+            0
+        }),
+        truncated,
+        error,
+    }
 }
 
 fn empty_computer(timestamp: u64) -> ComputerInfo {
@@ -205,21 +262,22 @@ fn empty_cpu_runtime(timestamp: u64) -> CpuRuntimeInfo {
 }
 
 fn empty_memory(timestamp: u64) -> SystemMemoryInfo {
-    let metric = || empty_metric("Memory", timestamp);
+    let bytes = || empty_metric("Memory", timestamp);
+    let percent = || empty_metric("Memory", timestamp);
     SystemMemoryInfo {
-        total_physical_bytes: metric(),
-        available_physical_bytes: metric(),
-        used_physical_bytes: metric(),
-        usage_percent: metric(),
-        total_page_file_bytes: metric(),
-        available_page_file_bytes: metric(),
-        total_virtual_bytes: metric(),
-        available_virtual_bytes: metric(),
-        committed_bytes: metric(),
-        commit_limit_bytes: metric(),
-        paged_pool_bytes: metric(),
-        non_paged_pool_bytes: metric(),
-        hardware_reserved_bytes: metric(),
+        total_physical_bytes: bytes(),
+        available_physical_bytes: bytes(),
+        used_physical_bytes: bytes(),
+        usage_percent: percent(),
+        total_page_file_bytes: bytes(),
+        available_page_file_bytes: bytes(),
+        total_virtual_bytes: bytes(),
+        available_virtual_bytes: bytes(),
+        committed_bytes: bytes(),
+        commit_limit_bytes: bytes(),
+        paged_pool_bytes: bytes(),
+        non_paged_pool_bytes: bytes(),
+        hardware_reserved_bytes: bytes(),
         dimms: Vec::new(),
         provider_status: empty_status("DIMM provider", timestamp),
     }
@@ -342,62 +400,63 @@ pub fn collect_full_system_report() -> SystemFullReport {
         empty_cpu_runtime(timestamp),
         collect_cpu_runtime_info,
     );
-    let gpus = collect_isolated("GPU", Vec::new(), collect_gpu_devices);
+    let gpus =
+        collect_isolated_with_status("GPU", Vec::new(), gpu::collect_gpu_devices_with_status);
     let memory = collect_isolated("Memory", empty_memory(timestamp), collect_memory_info);
-    let storage = collect_isolated(
+    let storage = collect_isolated_with_status(
         "Storage",
         StorageSnapshot {
             physical_disks: Vec::new(),
             volumes: Vec::new(),
         },
-        collect_storage_snapshot,
+        storage::collect_storage_snapshot_with_status,
     );
-    let network = collect_isolated(
+    let network = collect_isolated_with_status(
         "Network",
         empty_network(timestamp),
-        collect_network_snapshot,
+        network::collect_network_snapshot_with_status,
     );
-    let media = collect_isolated(
+    let media = collect_isolated_with_status(
         "Media",
         MediaDevicesSnapshot {
             displays: Vec::new(),
             audio_devices: Vec::new(),
         },
-        collect_media_snapshot,
+        display_audio::collect_media_snapshot_with_status,
     );
-    let devices = collect_isolated(
+    let devices = collect_isolated_with_status(
         "Devices",
         DevicesSnapshot {
             usb_devices: Vec::new(),
             pci_devices: Vec::new(),
             other_pnp_devices: Vec::new(),
         },
-        collect_devices_snapshot,
+        devices::collect_devices_snapshot_with_status,
     );
     let battery = collect_isolated("Battery", empty_battery(timestamp), collect_battery_power);
-    let processes = collect_isolated(
+    let processes = collect_isolated_with_status(
         "Processes",
         ProcessSnapshot {
             total_processes: 0,
             total_threads: 0,
             top_memory_processes: Vec::new(),
         },
-        collect_processes_snapshot,
+        processes::collect_processes_snapshot_with_status,
     );
-    let windows_env = collect_isolated(
+    let windows_env = collect_isolated_with_status(
         "Windows environment",
         empty_windows_env(timestamp),
-        collect_windows_env,
+        windows_env::collect_windows_env_with_status,
     );
     let dev_env = collect_isolated(
         "Development environment",
         DevEnvironmentSnapshot { tools: Vec::new() },
         collect_dev_environment,
     );
-    let diagnostics = collect_isolated(
+    let diagnostics = collect_isolated_with_status(
         "Diagnostics",
         empty_diagnostics(timestamp),
-        collect_diagnostics_snapshot,
+        diagnostics::collect_diagnostics_snapshot_with_status,
     );
 
     let memory_status = memory.value.provider_status.clone();
@@ -408,38 +467,18 @@ pub fn collect_full_system_report() -> SystemFullReport {
         os.status,
         cpu_static.status,
         cpu_runtime.status,
-        set_count(gpus.status, gpus.value.len()),
+        gpus.status,
         memory.status,
         memory_status,
-        set_count(
-            storage.status,
-            storage.value.physical_disks.len() + storage.value.volumes.len(),
-        ),
-        set_count(network.status, network.value.adapters.len()),
-        set_count(
-            media.status,
-            media.value.displays.len() + media.value.audio_devices.len(),
-        ),
-        set_count(
-            devices.status,
-            devices.value.usb_devices.len()
-                + devices.value.pci_devices.len()
-                + devices.value.other_pnp_devices.len(),
-        ),
+        storage.status,
+        network.status,
+        media.status,
+        devices.status,
         battery.status,
-        set_count(processes.status, processes.value.top_memory_processes.len()),
-        set_count(
-            windows_env.status,
-            windows_env.value.startup_items.len()
-                + windows_env.value.installed_apps_sample.len()
-                + windows_env.value.active_services_sample.len(),
-        ),
+        processes.status,
+        windows_env.status,
         set_count(dev_env.status, dev_env.value.tools.len()),
-        set_count(
-            diagnostics.status,
-            diagnostics.value.recent_crash_dumps.len()
-                + diagnostics.value.whea_hardware_events.len(),
-        ),
+        diagnostics.status,
     ];
 
     SystemFullReport {
@@ -475,5 +514,33 @@ pub fn export_system_report_json(sanitize: bool) -> Result<String, String> {
         Ok(sanitize_report_json(&json))
     } else {
         Ok(json)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_failure_empty_collection_is_not_reported_as_good_zero() {
+        let status = collection_status_for(
+            "fixture-provider",
+            MetricQuality::ReadError,
+            0,
+            false,
+            Some("API enumeration failed"),
+        );
+        assert_ne!(status.quality, MetricQuality::Good);
+        assert_eq!(status.item_count, Some(0));
+        assert!(status.timestamp > 0);
+        assert!(status.error.is_some());
+    }
+
+    #[test]
+    fn successful_empty_collection_is_reported_as_good_zero() {
+        let status = collection_status_for("fixture-provider", MetricQuality::Good, 0, false, None);
+        assert_eq!(status.quality, MetricQuality::Good);
+        assert_eq!(status.item_count, Some(0));
+        assert!(status.error.is_none());
     }
 }

@@ -3,8 +3,10 @@
 //! 设备清单只来自 SetupAPI；属性和实例 ID 使用按 API 需求长度扩展的
 //! UTF-16 缓冲区读取，空集合表示系统没有枚举到可用设备。
 
+use super::collection_status_for;
 #[cfg(test)]
 use super::quality::stable_device_id;
+use super::quality::{classify_win32_error, CollectorResult, MetricQuality};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
@@ -13,6 +15,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     DIGCF_PRESENT, HDEVINFO, SPDRP_CLASS, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SPDRP_HARDWAREID,
     SPDRP_MFG, SP_DEVINFO_DATA,
 };
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Registry::{REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ};
 
 /// 外设与总线设备条目。
@@ -219,7 +222,7 @@ fn classify_bus_type(hardware_id: &str) -> &'static str {
 }
 
 /// 枚举系统中所有即插即用设备与外设。
-pub fn collect_devices_snapshot() -> DevicesSnapshot {
+fn collect_devices_snapshot_raw() -> (DevicesSnapshot, Option<MetricQuality>) {
     let mut usb = Vec::new();
     let mut pci = Vec::new();
     let mut other = Vec::new();
@@ -233,11 +236,17 @@ pub fn collect_devices_snapshot() -> DevicesSnapshot {
         );
 
         if dev_info == 0 || dev_info == -1 {
-            return DevicesSnapshot {
-                usb_devices: usb,
-                pci_devices: pci,
-                other_pnp_devices: other,
-            };
+            return (
+                DevicesSnapshot {
+                    usb_devices: usb,
+                    pci_devices: pci,
+                    other_pnp_devices: other,
+                },
+                Some(match GetLastError() {
+                    0 => MetricQuality::ApiUnavailable,
+                    code => classify_win32_error(code),
+                }),
+            );
         }
 
         let mut index = 0u32;
@@ -290,11 +299,32 @@ pub fn collect_devices_snapshot() -> DevicesSnapshot {
         SetupDiDestroyDeviceInfoList(dev_info);
     }
 
-    DevicesSnapshot {
-        usb_devices: usb,
-        pci_devices: pci,
-        other_pnp_devices: other,
+    (
+        DevicesSnapshot {
+            usb_devices: usb,
+            pci_devices: pci,
+            other_pnp_devices: other,
+        },
+        None,
+    )
+}
+
+pub(crate) fn collect_devices_snapshot_with_status() -> CollectorResult<DevicesSnapshot> {
+    let (snapshot, failure) = collect_devices_snapshot_raw();
+    let count =
+        snapshot.usb_devices.len() + snapshot.pci_devices.len() + snapshot.other_pnp_devices.len();
+    let (quality, error) = match failure {
+        Some(quality) => (quality, Some("SetupAPI device enumeration failed")),
+        None => (MetricQuality::Good, None),
+    };
+    CollectorResult {
+        status: collection_status_for("SetupAPI", quality, count, false, error),
+        value: snapshot,
     }
+}
+
+pub fn collect_devices_snapshot() -> DevicesSnapshot {
+    collect_devices_snapshot_with_status().value
 }
 
 #[cfg(test)]

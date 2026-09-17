@@ -3,7 +3,10 @@
 //! Toolhelp32 只负责枚举进程关系与线程数；工作集必须逐进程通过真实
 //! `OpenProcess`/`GetProcessMemoryInfo` 读取，任何权限或退出竞态都保留为空值。
 
-use super::quality::{classify_win32_error, MetricQuality, MetricValue};
+use super::collection_status_for;
+use super::quality::{
+    classify_win32_error, CollectionStatus, CollectorResult, MetricQuality, MetricValue,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::mem::size_of;
@@ -94,19 +97,59 @@ fn read_process_working_set(pid: u32) -> MetricValue<u64> {
     }
 }
 
-/// 采集系统当前运行进程快照。
-pub fn collect_processes_snapshot() -> ProcessSnapshot {
+const PROCESS_DISPLAY_LIMIT: usize = 25;
+const PROCESS_SOURCE: &str = "Win32_Toolhelp32";
+
+fn process_status_for(
+    total_processes: u32,
+    returned_items: usize,
+    quality: MetricQuality,
+    error: Option<&str>,
+) -> CollectionStatus {
+    let mut status = collection_status_for(
+        PROCESS_SOURCE,
+        quality,
+        total_processes as usize,
+        total_processes as usize > returned_items,
+        error,
+    );
+    // 进程状态的 item_count 始终表示已枚举总数，即使后续 API 失败。
+    status.item_count = Some(total_processes);
+    status
+}
+
+/// 采集系统当前运行进程快照并保留枚举 API 状态。
+pub(crate) fn collect_processes_snapshot_with_status() -> CollectorResult<ProcessSnapshot> {
     let mut list = Vec::new();
     let mut total_procs = 0u32;
     let mut total_threads = 0u32;
+    let mut quality = MetricQuality::Good;
+    let mut error = None;
 
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot == INVALID_HANDLE_VALUE {
-            return ProcessSnapshot {
-                total_processes: 0,
-                total_threads: 0,
-                top_memory_processes: list,
+            let error_code = GetLastError();
+            let quality = if error_code == 0 {
+                MetricQuality::ApiUnavailable
+            } else {
+                classify_win32_error(error_code)
+            };
+            let status = process_status_for(
+                0,
+                0,
+                quality,
+                Some(&format!(
+                    "Toolhelp32 process snapshot failed (Win32 error {error_code})"
+                )),
+            );
+            return CollectorResult {
+                value: ProcessSnapshot {
+                    total_processes: 0,
+                    total_threads: 0,
+                    top_memory_processes: list,
+                },
+                status,
             };
         }
 
@@ -114,7 +157,6 @@ pub fn collect_processes_snapshot() -> ProcessSnapshot {
         entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
         if Process32FirstW(snapshot, &mut entry) != 0 {
             loop {
-                // 使用 checked_add，避免计数器回绕；正常系统进程数不会触及上限。
                 total_procs = total_procs.checked_add(1).unwrap_or(u32::MAX);
                 total_threads = total_threads
                     .checked_add(entry.cntThreads)
@@ -139,14 +181,32 @@ pub fn collect_processes_snapshot() -> ProcessSnapshot {
                 });
 
                 if Process32NextW(snapshot, &mut entry) == 0 {
+                    let error_code = GetLastError();
+                    if error_code != windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES {
+                        quality = if error_code == 0 {
+                            MetricQuality::ApiUnavailable
+                        } else {
+                            classify_win32_error(error_code)
+                        };
+                        error = Some(format!(
+                            "Toolhelp32 process continuation failed (Win32 error {error_code})"
+                        ));
+                    }
                     break;
                 }
+            }
+        } else {
+            let error_code = GetLastError();
+            if error_code != windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES {
+                quality = classify_win32_error(error_code);
+                error = Some(format!(
+                    "Toolhelp32 process enumeration failed (Win32 error {error_code})"
+                ));
             }
         }
         CloseHandle(snapshot);
     }
 
-    // 真实工作集降序排列；无法读取的受保护/已退出进程始终排在最后。
     list.sort_by(|a, b| {
         match (
             a.memory_working_set_bytes.value,
@@ -161,12 +221,22 @@ pub fn collect_processes_snapshot() -> ProcessSnapshot {
         }
     });
 
-    ProcessSnapshot {
-        total_processes: total_procs,
-        total_threads,
-        // 列表截断只影响展示列表，计数仍保持完整真实值。
-        top_memory_processes: list.into_iter().take(25).collect(),
+    let returned_items = list.len().min(PROCESS_DISPLAY_LIMIT);
+    let status = process_status_for(total_procs, returned_items, quality, error.as_deref());
+    CollectorResult {
+        value: ProcessSnapshot {
+            total_processes: total_procs,
+            total_threads,
+            // 列表截断只影响展示列表，状态计数仍保持完整真实值。
+            top_memory_processes: list.into_iter().take(PROCESS_DISPLAY_LIMIT).collect(),
+        },
+        status,
     }
+}
+
+/// 保持历史公开签名；聚合层使用带状态的内部结果。
+pub fn collect_processes_snapshot() -> ProcessSnapshot {
+    collect_processes_snapshot_with_status().value
 }
 
 #[cfg(test)]
@@ -182,5 +252,27 @@ mod tests {
             item.memory_working_set_bytes.quality,
             MetricQuality::PermissionDenied
         );
+    }
+
+    #[test]
+    fn process_status_reports_total_count_and_display_truncation() {
+        let status = process_status_for(30, 25, MetricQuality::Good, None);
+        assert_eq!(status.quality, MetricQuality::Good);
+        assert_eq!(status.item_count, Some(30));
+        assert!(status.truncated);
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn process_status_keeps_api_failure_non_good_for_empty_collection() {
+        let status = process_status_for(
+            0,
+            0,
+            MetricQuality::ReadError,
+            Some("Toolhelp32 enumeration failed"),
+        );
+        assert_ne!(status.quality, MetricQuality::Good);
+        assert_eq!(status.item_count, Some(0));
+        assert!(status.error.is_some());
     }
 }

@@ -4,7 +4,10 @@
 //! `GetExtendedTcpTable`、`GetExtendedUdpTable`) 采集实时网络状态。
 //! WLAN provider 尚未接入时只返回明确的 Unsupported 空值，严禁读取或导出任何 Wi-Fi 密码。
 
-use super::quality::{classify_win32_error, current_timestamp_ms, MetricQuality, MetricValue};
+use super::collection_status_for;
+use super::quality::{
+    classify_win32_error, current_timestamp_ms, CollectorResult, MetricQuality, MetricValue,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::mem::{offset_of, size_of};
@@ -492,7 +495,11 @@ fn query_tcp_table(family: u32) -> Result<Vec<TcpEndpoint>, MetricQuality> {
             continue;
         }
         if result != ERROR_SUCCESS {
-            return Err(classify_win32_error(result));
+            return Err(if result == ERROR_SUCCESS {
+                MetricQuality::Invalid
+            } else {
+                classify_win32_error(result)
+            });
         }
 
         let returned_size = if returned_size == 0 {
@@ -563,7 +570,11 @@ fn query_udp_count(family: u32) -> Result<u32, MetricQuality> {
             continue;
         }
         if result != ERROR_SUCCESS {
-            return Err(classify_win32_error(result));
+            return Err(if result == ERROR_SUCCESS {
+                MetricQuality::Invalid
+            } else {
+                classify_win32_error(result)
+            });
         }
 
         let returned_size = if returned_size == 0 {
@@ -1000,7 +1011,11 @@ fn query_adapters_addresses() -> Result<AdapterAddressTable, MetricQuality> {
             continue;
         }
         if result != ERROR_SUCCESS {
-            return Err(classify_win32_error(result));
+            return Err(if result == ERROR_SUCCESS {
+                MetricQuality::Invalid
+            } else {
+                classify_win32_error(result)
+            });
         }
 
         let returned_size = if returned_size == 0 {
@@ -1076,10 +1091,10 @@ fn update_adapter_rates(
 
 /// 采集系统中所有网络适配器与实时收发速率。
 pub fn collect_network_adapters() -> Vec<NetworkAdapterInfo> {
-    collect_network_adapters_at(current_timestamp_ms())
+    collect_network_adapters_at(current_timestamp_ms()).unwrap_or_default()
 }
 
-fn collect_network_adapters_at(timestamp: u64) -> Vec<NetworkAdapterInfo> {
+fn collect_network_adapters_at(timestamp: u64) -> Result<Vec<NetworkAdapterInfo>, MetricQuality> {
     let mut adapters = Vec::new();
 
     unsafe {
@@ -1089,7 +1104,11 @@ fn collect_network_adapters_at(timestamp: u64) -> Vec<NetworkAdapterInfo> {
             if !table.is_null() {
                 FreeMibTable(table as *const _);
             }
-            return adapters;
+            return Err(if result == ERROR_SUCCESS {
+                MetricQuality::Invalid
+            } else {
+                classify_win32_error(result)
+            });
         }
 
         let address_data = query_adapters_addresses();
@@ -1229,7 +1248,7 @@ fn collect_network_adapters_at(timestamp: u64) -> Vec<NetworkAdapterInfo> {
         FreeMibTable(table as *const _);
     }
 
-    adapters
+    Ok(adapters)
 }
 
 /// 采集 Wi-Fi 无线网络连接状态；Native WLAN provider 接入前保持明确空值。
@@ -1344,14 +1363,34 @@ fn collect_connections_summary_at(timestamp: u64) -> NetworkConnectionsSummary {
     }
 }
 
-/// 采集网络子系统全景快照。
-pub fn collect_network_snapshot() -> NetworkSnapshot {
+/// 采集网络子系统全景快照并保留适配器 API 状态。
+pub(crate) fn collect_network_snapshot_with_status() -> CollectorResult<NetworkSnapshot> {
     let timestamp = current_timestamp_ms();
-    NetworkSnapshot {
-        adapters: collect_network_adapters_at(timestamp),
-        wifi_info: collect_wifi_status_at(timestamp),
-        connections_summary: collect_connections_summary_at(timestamp),
+    let adapter_result = collect_network_adapters_at(timestamp);
+    let adapters = adapter_result.clone().unwrap_or_default();
+    let wifi_info = collect_wifi_status_at(timestamp);
+    let connections_summary = collect_connections_summary_at(timestamp);
+    let (quality, error) = match adapter_result {
+        Ok(_) if wifi_info.is_connected.quality == MetricQuality::Unsupported => (
+            MetricQuality::Unsupported,
+            Some("WLAN provider is not integrated"),
+        ),
+        Ok(_) => (MetricQuality::Good, None),
+        Err(quality) => (quality, Some("GetIfTable2 failed")),
+    };
+    CollectorResult {
+        status: collection_status_for("IP_Helper", quality, adapters.len(), false, error),
+        value: NetworkSnapshot {
+            adapters,
+            wifi_info,
+            connections_summary,
+        },
     }
+}
+
+/// 保持历史公开签名。
+pub fn collect_network_snapshot() -> NetworkSnapshot {
+    collect_network_snapshot_with_status().value
 }
 
 #[cfg(test)]

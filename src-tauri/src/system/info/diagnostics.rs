@@ -3,7 +3,10 @@
 //! 仅扫描 SystemRoot 下的 Minidump 文件 metadata；没有 Event Log Provider 时，事件集合
 //! 保持为空并以 Unsupported 指标表达能力边界，不读取 dump 内容或任何密钥。
 
-use super::quality::{current_timestamp_ms, CollectionStatus, MetricQuality, MetricValue};
+use super::collection_status_for;
+use super::quality::{
+    current_timestamp_ms, CollectionStatus, CollectorResult, MetricQuality, MetricValue,
+};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -210,6 +213,32 @@ pub fn collect_diagnostics_snapshot() -> DiagnosticsSnapshot {
         whea_hardware_events: Vec::new(),
         whea_hardware_events_status: unsupported_event_status(timestamp),
         overall_health_assessment: unsupported_health(timestamp),
+    }
+}
+
+pub(crate) fn collect_diagnostics_snapshot_with_status() -> CollectorResult<DiagnosticsSnapshot> {
+    let snapshot = collect_diagnostics_snapshot();
+    let count = snapshot.recent_crash_dumps.len() + snapshot.whea_hardware_events.len();
+    let (quality, error) = if snapshot.minidump_count.quality != MetricQuality::Good {
+        (
+            snapshot.minidump_count.quality,
+            Some("Minidump metadata provider failed"),
+        )
+    } else {
+        (
+            snapshot.whea_hardware_events_status.quality,
+            Some("Windows Event Log provider is not integrated"),
+        )
+    };
+    CollectorResult {
+        status: collection_status_for(
+            "Windows_Minidump+EventLog",
+            quality,
+            count,
+            snapshot.minidump_truncated || snapshot.whea_hardware_events_status.truncated,
+            error,
+        ),
+        value: snapshot,
     }
 }
 

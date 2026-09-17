@@ -7,9 +7,9 @@ use crate::system::info::quality::{
     stable_device_id, CollectionStatus, MetricQuality, MetricValue,
 };
 use crate::system::info::{
-    collect_cpu_runtime_info, collect_gpu_devices, collect_memory_info, collect_network_snapshot,
-    collect_storage_snapshot, CpuRuntimeInfo, NetworkAdapterInfo, NetworkConnectionsSummary,
-    NetworkSnapshot, StorageSnapshot, SystemMemoryInfo, WiFiConnectionInfo,
+    collect_cpu_runtime_info, collect_memory_info, CpuRuntimeInfo, NetworkAdapterInfo,
+    NetworkConnectionsSummary, NetworkSnapshot, StorageSnapshot, SystemMemoryInfo,
+    WiFiConnectionInfo,
 };
 use serde::{Deserialize, Serialize};
 
@@ -165,11 +165,6 @@ fn empty_memory(timestamp: u64) -> SystemMemoryInfo {
     }
 }
 
-fn status_count(mut status: CollectionStatus, count: usize) -> CollectionStatus {
-    status.item_count = Some(u32::try_from(count).unwrap_or(u32::MAX));
-    status
-}
-
 fn runtime_disk_from_volume(
     volume: &crate::system::info::VolumeInfo,
     timestamp: u64,
@@ -310,36 +305,32 @@ pub fn get_hardware_performance() -> HardwarePerformance {
         empty_memory(timestamp),
         collect_memory_info,
     );
-    let gpus = crate::system::info::collect_isolated("GPU", Vec::new(), collect_gpu_devices);
-    let storage = crate::system::info::collect_isolated(
+    let gpus = crate::system::info::collect_isolated_with_status(
+        "GPU",
+        Vec::new(),
+        crate::system::info::gpu::collect_gpu_devices_with_status,
+    );
+    let storage = crate::system::info::collect_isolated_with_status(
         "Storage",
         StorageSnapshot {
             physical_disks: Vec::new(),
             volumes: Vec::new(),
         },
-        collect_storage_snapshot,
+        crate::system::info::storage::collect_storage_snapshot_with_status,
     );
-    let network = crate::system::info::collect_isolated(
+    let network = crate::system::info::collect_isolated_with_status(
         "Network",
         empty_network_snapshot(timestamp),
-        collect_network_snapshot,
+        crate::system::info::network::collect_network_snapshot_with_status,
     );
 
-    let mut network_status = network.status;
-    network_status = status_count(network_status, network.value.adapters.len());
-    if network_status.error.is_none() {
-        network_status.error = Some(
-            "现有 NetworkAdapterInfo 未暴露 LUID，运行时 ID 使用真实 index+description 哈希"
-                .to_string(),
-        );
-    }
     let mut provider_status = vec![
         cpu.status,
         memory.status,
         memory.value.provider_status.clone(),
-        status_count(gpus.status, gpus.value.len()),
-        status_count(storage.status, storage.value.volumes.len()),
-        network_status,
+        gpus.status,
+        storage.status,
+        network.status,
     ];
 
     let memory_value = retimestamp_memory(memory.value, timestamp);

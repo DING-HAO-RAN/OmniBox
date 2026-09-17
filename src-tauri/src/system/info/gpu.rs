@@ -3,9 +3,13 @@
 //! 这里仅使用 Win32 GDI 枚举显示适配器。GDI 不提供可靠的显存、驱动版本或
 //! 运行时传感器数据，因此这些指标必须明确返回无值状态，不能用估算值填充。
 
-use super::quality::{stable_device_id, MetricValue};
+use super::collection_status_for;
+use super::quality::{
+    classify_win32_error, stable_device_id, CollectorResult, MetricQuality, MetricValue,
+};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, DISPLAY_DEVICEW, DISPLAY_DEVICE_PRIMARY_DEVICE,
 };
@@ -95,18 +99,18 @@ fn unavailable_metric<T>(unit: &str, reason: &str) -> MetricValue<T> {
 /// 枚举系统中所有已返回名称的显示适配器。
 ///
 /// GDI 只负责枚举真实适配器和其静态标识；无法可靠提供的动态指标全部保持无值。
-pub fn collect_gpu_devices() -> Vec<GpuDevice> {
+fn collect_gpu_devices_raw() -> (Vec<GpuDevice>, u32) {
     let mut devices = Vec::new();
     let mut index = 0_u32;
 
-    loop {
+    let last_error = loop {
         let mut display_device: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
         display_device.cb = size_of::<DISPLAY_DEVICEW>() as u32;
 
         let enumerated =
             unsafe { EnumDisplayDevicesW(std::ptr::null(), index, &mut display_device, 0) != 0 };
         if !enumerated {
-            break;
+            break unsafe { GetLastError() };
         }
 
         let name = decode_display_text(&display_device.DeviceString);
@@ -158,9 +162,40 @@ pub fn collect_gpu_devices() -> Vec<GpuDevice> {
         }
 
         index += 1;
-    }
+    };
 
-    devices
+    (devices, last_error)
+}
+
+pub(crate) fn collect_gpu_devices_with_status() -> CollectorResult<Vec<GpuDevice>> {
+    let (devices, last_error) = collect_gpu_devices_raw();
+    let (quality, error) = if last_error == 259 {
+        (MetricQuality::Good, None)
+    } else if last_error == 0 {
+        (
+            MetricQuality::ApiUnavailable,
+            Some("GDI display adapter enumeration failed"),
+        )
+    } else {
+        (
+            classify_win32_error(last_error),
+            Some("GDI display adapter enumeration failed"),
+        )
+    };
+    CollectorResult {
+        status: collection_status_for(
+            "GDI_EnumDisplayDevices",
+            quality,
+            devices.len(),
+            false,
+            error,
+        ),
+        value: devices,
+    }
+}
+
+pub fn collect_gpu_devices() -> Vec<GpuDevice> {
+    collect_gpu_devices_raw().0
 }
 
 #[cfg(test)]

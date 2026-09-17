@@ -3,7 +3,8 @@
 //! 注册表字段只保留 Windows API 实际返回的值；没有可靠 Provider 的能力明确标记为
 //! Unsupported，严禁读取或泄露 BitLocker 恢复密钥、凭据或私人密码。
 
-use super::quality::{current_timestamp_ms, MetricValue};
+use super::collection_status_for;
+use super::quality::{current_timestamp_ms, CollectorResult, MetricQuality, MetricValue};
 use serde::{Deserialize, Serialize};
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY,
@@ -495,6 +496,23 @@ pub fn collect_windows_env() -> WindowsEnvSnapshot {
         security_status: security,
         // 第一阶段没有 SCM Provider；空集合由后续聚合层标记 Unsupported。
         active_services_sample: Vec::new(),
+    }
+}
+
+pub(crate) fn collect_windows_env_with_status() -> CollectorResult<WindowsEnvSnapshot> {
+    let snapshot = collect_windows_env();
+    let count = snapshot.startup_items.len()
+        + snapshot.installed_apps_sample.len()
+        + snapshot.active_services_sample.len();
+    CollectorResult {
+        status: collection_status_for(
+            "Windows_Registry+SCM",
+            MetricQuality::Unsupported,
+            count,
+            false,
+            Some("SCM/security provider is not fully integrated"),
+        ),
+        value: snapshot,
     }
 }
 

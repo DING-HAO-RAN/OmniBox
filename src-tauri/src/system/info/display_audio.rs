@@ -3,7 +3,10 @@
 //! 显示器信息只接受 GDI 枚举和当前模式 API 的真实返回；第一阶段没有
 //! DisplayConfig/EDID 与 Core Audio Provider，因此 HDR 和音频保持明确空值。
 
-use super::quality::{current_timestamp_ms, stable_device_id, MetricValue};
+use super::collection_status_for;
+use super::quality::{
+    current_timestamp_ms, stable_device_id, CollectorResult, MetricQuality, MetricValue,
+};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use windows_sys::Win32::Graphics::Gdi::{
@@ -151,12 +154,30 @@ pub fn collect_audio_devices() -> Vec<AudioDeviceInfo> {
     Vec::new()
 }
 
-/// 采集媒体设备快照。
-pub fn collect_media_snapshot() -> MediaDevicesSnapshot {
-    MediaDevicesSnapshot {
-        displays: collect_displays(),
-        audio_devices: collect_audio_devices(),
+/// 采集媒体设备快照并保留显示/音频 Provider 能力状态。
+pub(crate) fn collect_media_snapshot_with_status() -> CollectorResult<MediaDevicesSnapshot> {
+    let displays = collect_displays();
+    let audio_devices = collect_audio_devices();
+    let count = displays.len() + audio_devices.len();
+    // Core Audio 尚未接入，空音频集合不能伪装为成功的完整媒体采集。
+    let status = collection_status_for(
+        "Display/GDI+CoreAudio",
+        MetricQuality::Unsupported,
+        count,
+        false,
+        Some("Core Audio provider is not integrated"),
+    );
+    CollectorResult {
+        status,
+        value: MediaDevicesSnapshot {
+            displays,
+            audio_devices,
+        },
     }
+}
+
+pub fn collect_media_snapshot() -> MediaDevicesSnapshot {
+    collect_media_snapshot_with_status().value
 }
 
 #[cfg(test)]

@@ -3,7 +3,10 @@
 //! 所有数据均来自只读 Win32 Storage IOCTL 或文件系统 API；无法可靠读取的字段
 //! 保持无值状态，不使用样本容量、温度、序列号或文件系统名称。
 
-use super::quality::{current_timestamp_ms, stable_device_id, MetricQuality, MetricValue};
+use super::collection_status_for;
+use super::quality::{
+    current_timestamp_ms, stable_device_id, CollectorResult, MetricQuality, MetricValue,
+};
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
@@ -94,6 +97,13 @@ const STORAGE_PROTOCOL_DATA_DESCRIPTOR_HEADER_SIZE: usize = 8;
 const MAX_STORAGE_DESCRIPTOR_SIZE: usize = 1024 * 1024;
 const MAX_LOGICAL_DRIVE_BUFFER: usize = 32 * 1024;
 const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
+// DISK_GEOMETRY 在 Windows ABI 下为 32 字节；保留完整结构缓冲，避免尾部布局差异。
+const DISK_GEOMETRY_BUFFER_SIZE: usize = 32;
+const BYTES_PER_SECTOR_OFFSET: usize = 20;
+
+fn validate_sector_geometry_response(bytes_returned: usize, buffer_len: usize) -> bool {
+    bytes_returned >= BYTES_PER_SECTOR_OFFSET + size_of::<u32>() && bytes_returned <= buffer_len
+}
 
 #[repr(C)]
 struct STORAGE_PROPERTY_QUERY {
@@ -531,10 +541,7 @@ fn query_disk_capacity(handle: HANDLE) -> Option<u64> {
 }
 
 fn query_sector_size(handle: HANDLE) -> Option<u32> {
-    // DISK_GEOMETRY 的 BytesPerSector 位于 8 + 4 + 4 + 4 字节处。
-    const DISK_GEOMETRY_SIZE: usize = 24;
-    const BYTES_PER_SECTOR_OFFSET: usize = 20;
-    let mut output = [0_u8; DISK_GEOMETRY_SIZE];
+    let mut output = [0_u8; DISK_GEOMETRY_BUFFER_SIZE];
     let mut bytes_returned = 0_u32;
     let ok = unsafe {
         DeviceIoControl(
@@ -549,10 +556,8 @@ fn query_sector_size(handle: HANDLE) -> Option<u32> {
         )
     };
 
-    if ok == 0
-        || bytes_returned < output.len() as u32
-        || usize::try_from(bytes_returned).ok()? > output.len()
-    {
+    let returned = usize::try_from(bytes_returned).ok()?;
+    if ok == 0 || !validate_sector_geometry_response(returned, output.len()) {
         return None;
     }
     let sector_size = read_u32_le(&output, BYTES_PER_SECTOR_OFFSET)?;
@@ -726,45 +731,45 @@ pub fn collect_physical_disks() -> Vec<PhysicalDiskInfo> {
     disks
 }
 
-fn enumerate_logical_drives() -> Vec<String> {
+fn enumerate_logical_drives_result() -> Result<Vec<String>, MetricQuality> {
     let mut capacity = 256_usize;
 
     loop {
         let capacity_u32 = match u32::try_from(capacity) {
             Ok(value) => value,
-            Err(_) => return Vec::new(),
+            Err(_) => return Err(MetricQuality::Invalid),
         };
         let mut buffer = vec![0_u16; capacity];
         let length = unsafe { GetLogicalDriveStringsW(capacity_u32, buffer.as_mut_ptr()) };
         if length == 0 {
-            return Vec::new();
+            return Err(MetricQuality::ApiUnavailable);
         }
         let length = match usize::try_from(length) {
             Ok(value) => value,
-            Err(_) => return Vec::new(),
+            Err(_) => return Err(MetricQuality::Invalid),
         };
 
         // 返回值达到容量边界时，按 API 语义扩大缓冲区后重试。
         let boundary = match capacity.checked_sub(1) {
             Some(value) => value,
-            None => return Vec::new(),
+            None => return Err(MetricQuality::Invalid),
         };
         if length >= boundary {
             let doubled = match capacity.checked_mul(2) {
                 Some(value) => value,
-                None => return Vec::new(),
+                None => return Err(MetricQuality::Invalid),
             };
             capacity = match length.checked_add(1) {
                 Some(value) => doubled.max(value),
-                None => return Vec::new(),
+                None => return Err(MetricQuality::Invalid),
             };
             if capacity > MAX_LOGICAL_DRIVE_BUFFER {
-                return Vec::new();
+                return Err(MetricQuality::Invalid);
             }
             continue;
         }
         if length > buffer.len() || buffer.get(length).copied() != Some(0) {
-            return Vec::new();
+            return Err(MetricQuality::Invalid);
         }
 
         let mut drives = Vec::new();
@@ -773,7 +778,7 @@ fn enumerate_logical_drives() -> Vec<String> {
             let rest = &buffer[offset..length];
             let end = match rest.iter().position(|character| *character == 0) {
                 Some(value) => value,
-                None => return Vec::new(),
+                None => return Err(MetricQuality::Invalid),
             };
             if end == 0 {
                 break;
@@ -784,22 +789,27 @@ fn enumerate_logical_drives() -> Vec<String> {
             }
             let step = match end.checked_add(1) {
                 Some(value) => value,
-                None => return Vec::new(),
+                None => return Err(MetricQuality::Invalid),
             };
             offset = match offset.checked_add(step) {
                 Some(value) => value,
-                None => return Vec::new(),
+                None => return Err(MetricQuality::Invalid),
             };
         }
-        return drives;
+        return Ok(drives);
     }
 }
 
-/// 枚举所有逻辑文件系统卷。
-pub fn collect_logical_volumes() -> Vec<VolumeInfo> {
+/// 枚举所有逻辑文件系统卷并返回 API 失败状态。
+fn collect_logical_volumes_raw() -> (Vec<VolumeInfo>, Option<MetricQuality>) {
     let mut volumes = Vec::new();
+    let drive_paths = match enumerate_logical_drives_result() {
+        Ok(paths) => paths,
+        Err(quality) => return (volumes, Some(quality)),
+    };
+    let mut had_failure = false;
 
-    for drive_path in enumerate_logical_drives() {
+    for drive_path in drive_paths {
         let drive_wide: Vec<u16> = drive_path
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -817,6 +827,7 @@ pub fn collect_logical_volumes() -> Vec<VolumeInfo> {
             )
         } != 0;
         if !free_ok || total_bytes == 0 || free_available > total_bytes {
+            had_failure = true;
             continue;
         }
 
@@ -825,11 +836,17 @@ pub fn collect_logical_volumes() -> Vec<VolumeInfo> {
         let mut flags = 0_u32;
         let volume_name_len = match u32::try_from(volume_name.len()) {
             Ok(value) => value,
-            Err(_) => continue,
+            Err(_) => {
+                had_failure = true;
+                continue;
+            }
         };
         let file_system_name_len = match u32::try_from(file_system_name.len()) {
             Ok(value) => value,
-            Err(_) => continue,
+            Err(_) => {
+                had_failure = true;
+                continue;
+            }
         };
         let volume_ok = unsafe {
             GetVolumeInformationW(
@@ -844,6 +861,7 @@ pub fn collect_logical_volumes() -> Vec<VolumeInfo> {
             )
         } != 0;
         if !volume_ok {
+            had_failure = true;
             continue;
         }
 
@@ -878,7 +896,12 @@ pub fn collect_logical_volumes() -> Vec<VolumeInfo> {
         });
     }
 
-    volumes
+    (volumes, had_failure.then_some(MetricQuality::ReadError))
+}
+
+/// 枚举所有逻辑文件系统卷。
+pub fn collect_logical_volumes() -> Vec<VolumeInfo> {
+    collect_logical_volumes_raw().0
 }
 
 /// 采集存储子系统完整快照。
@@ -886,6 +909,24 @@ pub fn collect_storage_snapshot() -> StorageSnapshot {
     StorageSnapshot {
         physical_disks: collect_physical_disks(),
         volumes: collect_logical_volumes(),
+    }
+}
+
+pub(crate) fn collect_storage_snapshot_with_status() -> CollectorResult<StorageSnapshot> {
+    let physical_disks = collect_physical_disks();
+    let (volumes, volume_failure) = collect_logical_volumes_raw();
+    let count = physical_disks.len() + volumes.len();
+    let snapshot = StorageSnapshot {
+        physical_disks,
+        volumes,
+    };
+    let (quality, error) = match volume_failure {
+        Some(quality) => (quality, Some("Logical volume API failed")),
+        None => (MetricQuality::Good, None),
+    };
+    CollectorResult {
+        status: collection_status_for("Win32_Storage", quality, count, false, error),
+        value: snapshot,
     }
 }
 
@@ -906,6 +947,23 @@ mod tests {
     #[test]
     fn storage_device_protocol_specific_property_is_device_property() {
         assert_eq!(STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY, 50);
+    }
+
+    #[test]
+    fn sector_geometry_buffer_covers_complete_layout_and_returned_field() {
+        assert!(DISK_GEOMETRY_BUFFER_SIZE >= 32);
+        assert!(validate_sector_geometry_response(
+            BYTES_PER_SECTOR_OFFSET + size_of::<u32>(),
+            DISK_GEOMETRY_BUFFER_SIZE,
+        ));
+        assert!(!validate_sector_geometry_response(
+            BYTES_PER_SECTOR_OFFSET + size_of::<u32>() - 1,
+            DISK_GEOMETRY_BUFFER_SIZE,
+        ));
+        assert!(!validate_sector_geometry_response(
+            DISK_GEOMETRY_BUFFER_SIZE + 1,
+            DISK_GEOMETRY_BUFFER_SIZE,
+        ));
     }
 
     #[test]

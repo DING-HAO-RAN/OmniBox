@@ -83,6 +83,24 @@ struct CacheInfo {
 
 static PREV_CPU_STATE: Mutex<Option<(u64, u64, u64)>> = Mutex::new(None);
 
+const MAX_REGISTRY_VALUE_BYTES: usize = 1024 * 1024;
+const MAX_PROCESSOR_INFO_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PROCESSOR_INFO_RETRIES: usize = 3;
+
+fn bounded_registry_length(length: u32) -> Result<usize, MetricQuality> {
+    let length = usize::try_from(length).map_err(|_| MetricQuality::Invalid)?;
+    (length <= MAX_REGISTRY_VALUE_BYTES)
+        .then_some(length)
+        .ok_or(MetricQuality::Invalid)
+}
+
+fn bounded_processor_info_length(length: u32) -> Result<usize, MetricQuality> {
+    let length = usize::try_from(length).map_err(|_| MetricQuality::Invalid)?;
+    (length <= MAX_PROCESSOR_INFO_BYTES)
+        .then_some(length)
+        .ok_or(MetricQuality::Invalid)
+}
+
 fn ft_to_u64(ft: FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
 }
@@ -148,7 +166,14 @@ fn query_registry_value(value_name: &str) -> Result<(u32, Vec<u8>), MetricQualit
             return Err(MetricQuality::ApiUnavailable);
         }
 
-        let mut data = vec![0u8; data_len as usize];
+        let initial_len = match bounded_registry_length(data_len) {
+            Ok(length) => length,
+            Err(quality) => {
+                let _ = RegCloseKey(hkey);
+                return Err(quality);
+            }
+        };
+        let mut data = vec![0u8; initial_len];
         let mut attempts = 0u8;
         loop {
             let mut actual_len = data.len() as u32;
@@ -172,7 +197,14 @@ fn query_registry_value(value_name: &str) -> Result<(u32, Vec<u8>), MetricQualit
                     let _ = RegCloseKey(hkey);
                     return Err(MetricQuality::ReadError);
                 }
-                data.resize(actual_len as usize, 0);
+                let next_len = match bounded_registry_length(actual_len) {
+                    Ok(length) => length,
+                    Err(quality) => {
+                        let _ = RegCloseKey(hkey);
+                        return Err(quality);
+                    }
+                };
+                data.resize(next_len, 0);
                 continue;
             }
 
@@ -702,45 +734,57 @@ fn get_physical_core_count() -> Result<u32, MetricQuality> {
         }
 
         let word_size = std::mem::size_of::<usize>();
-        let word_count = (required_len as usize)
-            .checked_add(word_size - 1)
-            .and_then(|size| size.checked_div(word_size))
-            .ok_or(MetricQuality::ReadError)?;
-        let mut buffer = vec![0usize; word_count];
-        let allocated_len = word_count
-            .checked_mul(word_size)
-            .ok_or(MetricQuality::ReadError)?;
-        let mut returned_len =
-            u32::try_from(allocated_len).map_err(|_| MetricQuality::ReadError)?;
-        if GetLogicalProcessorInformationEx(
-            RelationProcessorCore,
-            buffer.as_mut_ptr() as *mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
-            &mut returned_len,
-        ) == 0
-        {
-            return Err(MetricQuality::ReadError);
-        }
-
-        let returned_len = returned_len as usize;
-        if returned_len == 0 || returned_len > allocated_len {
-            return Err(MetricQuality::ReadError);
-        }
-
-        let buffer_bytes = std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), allocated_len);
-        let mut offset = 0usize;
-        let mut count = 0u32;
-        while offset < returned_len {
-            let record_size = validate_processor_core_record(buffer_bytes, offset, returned_len)?;
-            count = count.checked_add(1).ok_or(MetricQuality::ReadError)?;
-            offset = offset
-                .checked_add(record_size)
+        for attempt in 0..MAX_PROCESSOR_INFO_RETRIES {
+            let bounded_len = bounded_processor_info_length(required_len)?;
+            let word_count = bounded_len
+                .checked_add(word_size - 1)
+                .and_then(|size| size.checked_div(word_size))
                 .ok_or(MetricQuality::ReadError)?;
-        }
+            let mut buffer = vec![0usize; word_count];
+            let allocated_len = word_count
+                .checked_mul(word_size)
+                .ok_or(MetricQuality::ReadError)?;
+            let mut returned_len =
+                u32::try_from(allocated_len).map_err(|_| MetricQuality::ReadError)?;
+            if GetLogicalProcessorInformationEx(
+                RelationProcessorCore,
+                buffer.as_mut_ptr() as *mut SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
+                &mut returned_len,
+            ) == 0
+            {
+                let returned = usize::try_from(returned_len).unwrap_or(0);
+                if returned > allocated_len && attempt + 1 < MAX_PROCESSOR_INFO_RETRIES {
+                    required_len = returned_len;
+                    continue;
+                }
+                return Err(MetricQuality::ReadError);
+            }
 
-        if offset != returned_len || count == 0 {
-            return Err(MetricQuality::ReadError);
+            let returned_len =
+                usize::try_from(returned_len).map_err(|_| MetricQuality::ReadError)?;
+            if returned_len == 0 || returned_len > allocated_len {
+                return Err(MetricQuality::ReadError);
+            }
+
+            let buffer_bytes =
+                std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), allocated_len);
+            let mut offset = 0usize;
+            let mut count = 0u32;
+            while offset < returned_len {
+                let record_size =
+                    validate_processor_core_record(buffer_bytes, offset, returned_len)?;
+                count = count.checked_add(1).ok_or(MetricQuality::ReadError)?;
+                offset = offset
+                    .checked_add(record_size)
+                    .ok_or(MetricQuality::ReadError)?;
+            }
+
+            if offset != returned_len || count == 0 {
+                return Err(MetricQuality::ReadError);
+            }
+            return Ok(count);
         }
-        Ok(count)
+        Err(MetricQuality::ReadError)
     }
 }
 
@@ -1080,6 +1124,20 @@ mod tests {
             validate_processor_core_record(&record, 0, record.len()),
             Ok(record.len())
         );
+    }
+
+    #[test]
+    fn dynamic_cpu_lengths_reject_explicitly_over_limit_values() {
+        assert_eq!(
+            bounded_registry_length((MAX_REGISTRY_VALUE_BYTES + 1) as u32),
+            Err(MetricQuality::Invalid)
+        );
+        assert_eq!(
+            bounded_processor_info_length((MAX_PROCESSOR_INFO_BYTES + 1) as u32),
+            Err(MetricQuality::Invalid)
+        );
+        assert_eq!(bounded_registry_length(4096), Ok(4096));
+        assert_eq!(bounded_processor_info_length(4096), Ok(4096));
     }
 
     #[test]
