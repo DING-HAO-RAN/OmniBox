@@ -115,8 +115,8 @@ fn battery_from_status_at(
         };
     }
 
-    // 0 和 255，以及设置了未定义位的值，都不能证明存在可用电池。
-    let known_flag = battery_flag != 0 && battery_flag != 255 && (battery_flag & !0x0f) == 0;
+    // 0 表示未充电且非低电/临界，是有效的电池状态；255 和未定义高位仍未知。
+    let known_flag = battery_flag != 255 && (battery_flag & !0x0f) == 0;
     if !known_flag {
         let reason = format!("BatteryFlag 返回未知值 {battery_flag}");
         return BatteryPowerSnapshot {
@@ -244,6 +244,14 @@ mod tests {
         assert_eq!(snapshot.battery_percent.value, None);
         assert_eq!(snapshot.ac_connected.value, None);
         assert_ne!(snapshot.ac_connected.quality, MetricQuality::Good);
+    }
+
+    #[test]
+    fn zero_battery_flag_is_valid_battery_state() {
+        let snapshot = battery_from_status(true, 0, 80, 600);
+        assert_eq!(snapshot.has_battery.value, Some(true));
+        assert_eq!(snapshot.battery_percent.value, Some(80));
+        assert_eq!(snapshot.estimated_runtime_minutes.value, Some(10));
     }
 
     #[test]
