@@ -4,7 +4,6 @@
 //! 严禁记录密码、Cookie、Token、API Key、BitLocker 密钥等任何高危隐私。
 
 use serde_json::Value;
-use std::env;
 use std::net::Ipv6Addr;
 
 const REDACTED: &str = "<REDACTED>";
@@ -102,6 +101,8 @@ fn is_sensitive_key(key: &str) -> bool {
         "ssid",
         "bssid",
         "uuid",
+        "sid",
+        "user",
         "serial",
         "serialnumber",
         "hardwareid",
@@ -143,79 +144,10 @@ fn is_sensitive_key(key: &str) -> bool {
 fn sanitize_string(input: &str) -> String {
     let mut output = input.to_string();
 
-    if let Ok(username) = env::var("USERNAME") {
-        if !username.is_empty() {
-            output = replace_case_insensitive(&output, &username, "<USER>");
-        }
-    }
-    if let Ok(computer_name) = env::var("COMPUTERNAME") {
-        if !computer_name.is_empty() {
-            output = replace_case_insensitive(&output, &computer_name, "<COMPUTER_NAME>");
-        }
-    }
-
     output = redact_windows_user_paths(&output);
     output = redact_mac_addresses(&output);
     output = redact_ipv4_addresses(&output);
     redact_ipv6_addresses(&output)
-}
-
-/// 按 Unicode 小写形式匹配身份名称，并始终使用原始 UTF-8 字符边界替换。
-fn replace_case_insensitive(input: &str, needle: &str, replacement: &str) -> String {
-    if needle.is_empty() {
-        return input.to_string();
-    }
-
-    let folded_needle: Vec<char> = needle
-        .chars()
-        .flat_map(|character| character.to_lowercase())
-        .collect();
-    if folded_needle.is_empty() {
-        return input.to_string();
-    }
-
-    // 小写转换可能改变字符数量（例如某些 Unicode 大写字符），记录每个
-    // 折叠字符对应的原始字节范围，避免对 UTF-8 字节索引做错误切片。
-    let mut folded_input = Vec::new();
-    for (start, character) in input.char_indices() {
-        let end = start + character.len_utf8();
-        folded_input.extend(character.to_lowercase().map(|folded| (folded, start, end)));
-    }
-
-    let mut matches = Vec::new();
-    let mut folded_cursor = 0;
-    while folded_cursor + folded_needle.len() <= folded_input.len() {
-        let is_match = folded_input[folded_cursor..folded_cursor + folded_needle.len()]
-            .iter()
-            .map(|(character, _, _)| *character)
-            .eq(folded_needle.iter().copied());
-        if !is_match {
-            folded_cursor += 1;
-            continue;
-        }
-
-        let start = folded_input[folded_cursor].1;
-        let end = folded_input[folded_cursor + folded_needle.len() - 1].2;
-        matches.push((start, end));
-        // 跳过本次匹配覆盖的原始字符及其所有折叠结果，避免重复替换。
-        while folded_cursor < folded_input.len() && folded_input[folded_cursor].1 < end {
-            folded_cursor += 1;
-        }
-    }
-
-    if matches.is_empty() {
-        return input.to_string();
-    }
-
-    let mut result = String::with_capacity(input.len());
-    let mut cursor = 0;
-    for (start, end) in matches {
-        result.push_str(&input[cursor..start]);
-        result.push_str(replacement);
-        cursor = end;
-    }
-    result.push_str(&input[cursor..]);
-    result
 }
 
 fn is_path_separator(byte: u8) -> bool {
@@ -545,6 +477,16 @@ mod tests {
     }
 
     #[test]
+    fn sid_and_user_keys_are_redacted_case_insensitively() {
+        let raw = r#"{"SID":"S-1-5-21-fixture","user":"fixture-user","ordinary":"Example CPU"}"#;
+        let value: serde_json::Value = serde_json::from_str(&sanitize_report_json(raw)).unwrap();
+
+        assert_eq!(value["SID"], "<REDACTED>");
+        assert_eq!(value["user"], "<REDACTED>");
+        assert_eq!(value["ordinary"], "Example CPU");
+    }
+
+    #[test]
     fn incomplete_sensitive_objects_redact_every_nested_value() {
         let raw = r#"{"secret":{"value":"x","payload":"leak","nested":{"data":"still-leak"}}}"#;
         let value: serde_json::Value = serde_json::from_str(&sanitize_report_json(raw)).unwrap();
@@ -576,26 +518,11 @@ mod tests {
     }
 
     #[test]
-    fn unicode_identity_names_match_case_insensitively_without_changing_other_values() {
-        let previous_username = std::env::var_os("USERNAME");
-        let previous_computer_name = std::env::var_os("COMPUTERNAME");
-        std::env::set_var("USERNAME", "Müller");
-        std::env::set_var("COMPUTERNAME", "Étage");
-
+    fn ordinary_identity_words_do_not_depend_on_environment_variables() {
         let raw = r#"{"note":"user mÜLLER on éTAGE","ordinary":{"name":"Example CPU","count":3}}"#;
-        let sanitized = sanitize_report_json(raw);
+        let value: serde_json::Value = serde_json::from_str(&sanitize_report_json(raw)).unwrap();
 
-        match previous_username {
-            Some(value) => std::env::set_var("USERNAME", value),
-            None => std::env::remove_var("USERNAME"),
-        }
-        match previous_computer_name {
-            Some(value) => std::env::set_var("COMPUTERNAME", value),
-            None => std::env::remove_var("COMPUTERNAME"),
-        }
-
-        let value: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
-        assert_eq!(value["note"], "user <USER> on <COMPUTER_NAME>");
+        assert_eq!(value["note"], "user mÜLLER on éTAGE");
         assert_eq!(value["ordinary"]["name"], "Example CPU");
         assert_eq!(value["ordinary"]["count"], 3);
     }

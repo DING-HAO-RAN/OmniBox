@@ -703,7 +703,9 @@ mod tests {
     use serde_json::Value;
     use std::path::Path;
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, SYNCHRONIZE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
 
     fn assert_metric_is_well_formed<T>(metric: &crate::system::info::MetricValue<T>) {
         assert!(!metric.source.trim().is_empty(), "指标 source 不能为空");
@@ -797,7 +799,7 @@ mod tests {
     /// 等待测试自身启动的子进程自然退出，避免强制终止其它进程。
     fn wait_for_process_exit(pid: u32) {
         unsafe {
-            let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+            let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
             if handle.is_null() {
                 return;
             }

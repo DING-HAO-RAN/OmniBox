@@ -430,25 +430,34 @@
               <Cpu class="w-4 h-4 text-blue-400" />
               <h3 class="text-sm font-bold text-white">处理器指令集架构与拓扑 (CPUID)</h3>
             </div>
-            <span class="text-xs font-mono text-blue-400">{{ metricText(fullReport?.cpu_static?.name) }}</span>
+            <span class="text-xs font-mono text-blue-400" :title="metricMeta(fullReport?.cpu_static?.name)">{{ metricText(fullReport?.cpu_static?.name) }}</span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">厂商 / 微架构</span>
-              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.cpu_static?.vendor) }}</p>
+              <p class="font-bold text-white mt-0.5" :title="metricMeta(fullReport?.cpu_static?.vendor)">{{ metricText(fullReport?.cpu_static?.vendor) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">家族 / 型号 / 步进</span>
-              <p class="font-bold font-mono text-white mt-0.5">Family {{ formatMetricNumber(fullReport?.cpu_static?.family, 0) }} · Model {{ formatMetricNumber(fullReport?.cpu_static?.model, 0) }} · Stepping {{ formatMetricNumber(fullReport?.cpu_static?.stepping, 0) }}</p>
+              <p
+                class="font-bold font-mono text-white mt-0.5"
+                :title="`${metricMeta(fullReport?.cpu_static?.family)} | ${metricMeta(fullReport?.cpu_static?.model)} | ${metricMeta(fullReport?.cpu_static?.stepping)}`"
+              >Family {{ formatMetricNumber(fullReport?.cpu_static?.family, 0) }} · Model {{ formatMetricNumber(fullReport?.cpu_static?.model, 0) }} · Stepping {{ formatMetricNumber(fullReport?.cpu_static?.stepping, 0) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">L1 数据 / 指令缓存</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ formatMetricWithUnit(fullReport?.cpu_static?.l1_data_cache_kb, ' KB', 0) }} / {{ formatMetricWithUnit(fullReport?.cpu_static?.l1_inst_cache_kb, ' KB', 0) }}</p>
+              <p
+                class="font-bold font-mono text-white mt-0.5"
+                :title="`${metricMeta(fullReport?.cpu_static?.l1_data_cache_kb)} | ${metricMeta(fullReport?.cpu_static?.l1_inst_cache_kb)}`"
+              >{{ formatMetricWithUnit(fullReport?.cpu_static?.l1_data_cache_kb, ' KB', 0) }} / {{ formatMetricWithUnit(fullReport?.cpu_static?.l1_inst_cache_kb, ' KB', 0) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">L2 / L3 三级缓存</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ formatMetricMb(fullReport?.cpu_static?.l2_cache_kb) }} / {{ formatMetricMb(fullReport?.cpu_static?.l3_cache_kb) }}</p>
+              <p
+                class="font-bold font-mono text-white mt-0.5"
+                :title="`${metricMeta(fullReport?.cpu_static?.l2_cache_kb)} | ${metricMeta(fullReport?.cpu_static?.l3_cache_kb)}`"
+              >{{ formatMetricMb(fullReport?.cpu_static?.l2_cache_kb) }} / {{ formatMetricMb(fullReport?.cpu_static?.l3_cache_kb) }}</p>
             </div>
           </div>
 
@@ -474,25 +483,28 @@
               <Layers class="w-4 h-4 text-purple-400" />
               <h3 class="text-sm font-bold text-white">主板与 BIOS / UEFI 固件</h3>
             </div>
-            <span class="text-xs text-purple-300">{{ metricText(fullReport?.motherboard?.product) }}</span>
+            <span class="text-xs text-purple-300" :title="metricMeta(fullReport?.motherboard?.product)">{{ metricText(fullReport?.motherboard?.product) }}</span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">主板制造商</span>
-              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.motherboard?.manufacturer) }}</p>
+              <p class="font-bold text-white mt-0.5" :title="metricMeta(fullReport?.motherboard?.manufacturer)">{{ metricText(fullReport?.motherboard?.manufacturer) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">主板型号</span>
-              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.motherboard?.product) }}</p>
+              <p class="font-bold text-white mt-0.5" :title="metricMeta(fullReport?.motherboard?.product)">{{ metricText(fullReport?.motherboard?.product) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">BIOS 厂商 & 版本</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ metricText(fullReport?.bios?.vendor) }} {{ metricText(fullReport?.bios?.version) }}</p>
+              <p
+                class="font-bold font-mono text-white mt-0.5"
+                :title="`${metricMeta(fullReport?.bios?.vendor)} | ${metricMeta(fullReport?.bios?.version)}`"
+              >{{ metricText(fullReport?.bios?.vendor) }} {{ metricText(fullReport?.bios?.version) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">固件引导模式</span>
-              <p class="font-bold text-emerald-400 mt-0.5">{{ metricText(fullReport?.bios?.firmware_mode) }}</p>
+              <p class="font-bold text-emerald-400 mt-0.5" :title="metricMeta(fullReport?.bios?.firmware_mode)">{{ metricText(fullReport?.bios?.firmware_mode) }}</p>
             </div>
           </div>
         </section>
@@ -504,7 +516,7 @@
               <HardDrive class="w-4 h-4 text-emerald-400" />
               <h3 class="text-sm font-bold text-white">NVMe / SATA 物理磁盘硬件与 SMART 健康度</h3>
             </div>
-            <span class="text-xs text-emerald-400">共 {{ fullReportCount(fullReport?.storage?.physical_disks) }} 块物理驱动器</span>
+            <span class="text-xs text-emerald-400">共 {{ fullReportCount(fullReport?.storage?.physical_disks, 'storage') }} 块物理驱动器</span>
           </div>
 
           <div class="space-y-3">
@@ -515,35 +527,38 @@
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                  <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-bold">
+                  <span
+                    class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-bold"
+                    :title="metricMeta(disk.bus_type)"
+                  >
                     {{ metricText(disk.bus_type) }}
                   </span>
-                  <span class="text-xs font-bold text-white">{{ metricText(disk.model) }}</span>
+                  <span class="text-xs font-bold text-white" :title="metricMeta(disk.model)">{{ metricText(disk.model) }}</span>
                 </div>
-                <span class="text-xs font-mono text-gray-400">SN: {{ metricText(disk.serial_number) }}</span>
+                <span class="text-xs font-mono text-gray-400" :title="metricMeta(disk.serial_number)">SN: {{ metricText(disk.serial_number) }}</span>
               </div>
 
               <!-- SMART 健康度核心指标网格 -->
               <div v-if="disk.smart_health" class="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs pt-1">
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">复合温度</span>
-                  <p class="text-xs font-bold font-mono text-emerald-400">{{ formatMetricWithUnit(disk.smart_health.temperature_c, ' °C') }}</p>
+                  <p class="text-xs font-bold font-mono text-emerald-400" :title="metricMeta(disk.smart_health.temperature_c)">{{ formatMetricWithUnit(disk.smart_health.temperature_c, ' °C') }}</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">寿命已用 (Percentage Used)</span>
-                  <p class="text-xs font-bold font-mono text-white">{{ formatMetricWithUnit(disk.smart_health.percentage_used, '%') }}</p>
+                  <p class="text-xs font-bold font-mono text-white" :title="metricMeta(disk.smart_health.percentage_used)">{{ formatMetricWithUnit(disk.smart_health.percentage_used, '%') }}</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">累计写入量 (TBW)</span>
-                  <p class="text-xs font-bold font-mono text-sky-400">{{ formatMetricWithUnit(disk.smart_health.data_units_written_tb, ' TB') }}</p>
+                  <p class="text-xs font-bold font-mono text-sky-400" :title="metricMeta(disk.smart_health.data_units_written_tb)">{{ formatMetricWithUnit(disk.smart_health.data_units_written_tb, ' TB') }}</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">通电时间</span>
-                  <p class="text-xs font-bold font-mono text-white">{{ formatMetricWithUnit(disk.smart_health.power_on_hours, ' 小时', 0) }}</p>
+                  <p class="text-xs font-bold font-mono text-white" :title="metricMeta(disk.smart_health.power_on_hours)">{{ formatMetricWithUnit(disk.smart_health.power_on_hours, ' 小时', 0) }}</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">异常断电</span>
-                  <p class="text-xs font-bold font-mono text-amber-400">{{ formatMetricWithUnit(disk.smart_health.unsafe_shutdowns, ' 次', 0) }}</p>
+                  <p class="text-xs font-bold font-mono text-amber-400" :title="metricMeta(disk.smart_health.unsafe_shutdowns)">{{ formatMetricWithUnit(disk.smart_health.unsafe_shutdowns, ' 次', 0) }}</p>
                 </div>
               </div>
             </div>
@@ -557,7 +572,7 @@
               <Layers class="w-4 h-4 text-purple-400" />
               <h3 class="text-sm font-bold text-white">物理内存条 (DIMM) 插槽与规格</h3>
             </div>
-            <span class="text-xs text-purple-300">已插入 {{ fullReportCount(fullReport?.memory?.dimms) }} 根</span>
+            <span class="text-xs text-purple-300">已插入 {{ fullReportCount(fullReport?.memory?.dimms, 'dimm') }} 根</span>
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -588,7 +603,7 @@
                 <Monitor class="w-4 h-4 text-sky-400" />
                 <h3 class="text-xs font-bold text-white">显示设备</h3>
               </div>
-              <span class="text-[11px] text-gray-400">{{ fullReportCount(fullReport?.media?.displays) }} 台显示器</span>
+              <span class="text-[11px] text-gray-400">{{ fullReportCount(fullReport?.media?.displays, 'media') }} 台显示器</span>
             </div>
             <div v-for="disp in (fullReport?.media?.displays ?? [])" :key="disp.id" class="p-3 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-1">
               <div class="flex items-center justify-between font-bold text-white">
@@ -609,16 +624,16 @@
                 <BatteryCharging class="w-4 h-4 text-emerald-400" />
                 <h3 class="text-xs font-bold text-white">电池与电源状态</h3>
               </div>
-              <span class="text-[11px] text-emerald-400">{{ metricBoolean(fullReport?.battery_power?.has_battery) === null ? '—' : metricBoolean(fullReport?.battery_power?.has_battery) ? '便携设备' : '台式机' }}</span>
+              <span class="text-[11px] text-emerald-400" :title="metricMeta(fullReport?.battery_power?.has_battery)">{{ metricBoolean(fullReport?.battery_power?.has_battery) === null ? '—' : metricBoolean(fullReport?.battery_power?.has_battery) ? '便携设备' : '台式机' }}</span>
             </div>
             <div class="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-gray-400">供电模式:</span>
-                <span class="font-bold text-white">{{ metricText(fullReport?.battery_power?.charging_status) }}</span>
+                <span class="font-bold text-white" :title="metricMeta(fullReport?.battery_power?.charging_status)">{{ metricText(fullReport?.battery_power?.charging_status) }}</span>
               </div>
               <div class="flex items-center justify-between">
                 <span class="text-gray-400">当前电源计划:</span>
-                <span class="font-bold text-emerald-400">{{ metricText(fullReport?.battery_power?.power_scheme) }}</span>
+                <span class="font-bold text-emerald-400" :title="metricMeta(fullReport?.battery_power?.power_scheme)">{{ metricText(fullReport?.battery_power?.power_scheme) }}</span>
               </div>
             </div>
           </div>
@@ -636,19 +651,19 @@
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">产品版本</span>
-              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.os?.name) }}</p>
+              <p class="font-bold text-white mt-0.5" :title="metricMeta(fullReport?.os?.name)">{{ metricText(fullReport?.os?.name) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">内部版本号 (Build.UBR)</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ metricText(fullReport?.os?.build_number) }}</p>
+              <p class="font-bold font-mono text-white mt-0.5" :title="metricMeta(fullReport?.os?.build_number)">{{ metricText(fullReport?.os?.build_number) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">版本阶段 (Version)</span>
-              <p class="font-bold font-mono text-sky-400 mt-0.5">{{ metricText(fullReport?.os?.display_version) }}</p>
+              <p class="font-bold font-mono text-sky-400 mt-0.5" :title="metricMeta(fullReport?.os?.display_version)">{{ metricText(fullReport?.os?.display_version) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">系统架构</span>
-              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.os?.architecture) }}</p>
+              <p class="font-bold text-white mt-0.5" :title="metricMeta(fullReport?.os?.architecture)">{{ metricText(fullReport?.os?.architecture) }}</p>
             </div>
           </div>
         </section>
@@ -667,13 +682,13 @@
             >
               <div class="min-w-0 pr-2">
                 <span class="font-bold text-white block">{{ tool.name }}</span>
-                <span class="text-[11px] text-gray-400 truncate block mt-0.5">{{ metricText(tool.version) }}</span>
+                <span class="text-[11px] text-gray-400 truncate block mt-0.5" :title="metricMeta(tool.version)">{{ metricText(tool.version) }}</span>
               </div>
               <span
                 class="px-2 py-0.5 rounded text-[10px] font-medium flex-shrink-0"
                 :class="metricBoolean(tool.installed) === true ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-gray-500/10 text-gray-400 border border-gray-500/20'"
               >
-                {{ metricBoolean(tool.installed) === null ? '—' : metricBoolean(tool.installed) ? '已就绪' : '未检测到' }}
+                <span :title="metricMeta(tool.installed)">{{ metricBoolean(tool.installed) === null ? '—' : metricBoolean(tool.installed) ? '已就绪' : '未检测到' }}</span>
               </span>
             </div>
           </div>
@@ -688,19 +703,19 @@
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">安全启动 (Secure Boot)</span>
-              <p class="font-bold text-emerald-400 mt-0.5">{{ metricBooleanText(fullReport?.windows_env?.security_status?.secure_boot_enabled) }}</p>
+              <p class="font-bold text-emerald-400 mt-0.5" :title="metricMeta(fullReport?.windows_env?.security_status?.secure_boot_enabled)">{{ metricBooleanText(fullReport?.windows_env?.security_status?.secure_boot_enabled) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">TPM 芯片规格</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ metricText(fullReport?.windows_env?.security_status?.tpm_version) }}</p>
+              <p class="font-bold font-mono text-white mt-0.5" :title="metricMeta(fullReport?.windows_env?.security_status?.tpm_version)">{{ metricText(fullReport?.windows_env?.security_status?.tpm_version) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">Windows Defender 实时扫描</span>
-              <p class="font-bold text-emerald-400 mt-0.5">{{ metricBooleanText(fullReport?.windows_env?.security_status?.defender_realtime_protection) }}</p>
+              <p class="font-bold text-emerald-400 mt-0.5" :title="metricMeta(fullReport?.windows_env?.security_status?.defender_realtime_protection)">{{ metricBooleanText(fullReport?.windows_env?.security_status?.defender_realtime_protection) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">Windows 防火墙</span>
-              <p class="font-bold text-emerald-400 mt-0.5">{{ metricBooleanText(fullReport?.windows_env?.security_status?.firewall_public_enabled) }}</p>
+              <p class="font-bold text-emerald-400 mt-0.5" :title="metricMeta(fullReport?.windows_env?.security_status?.firewall_public_enabled)">{{ metricBooleanText(fullReport?.windows_env?.security_status?.firewall_public_enabled) }}</p>
             </div>
           </div>
         </section>
@@ -801,7 +816,15 @@ import {
 } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import type { HardwarePerformance, MetricValue, RuntimeDiskInfo, RuntimeNetworkInfo, GpuDevice, SystemFullReport, SystemMemoryInfo } from '../types/module';
-import { metricNumber, metricText, appendMetricPoint } from '../lib/metric';
+import {
+  appendMetricGap,
+  appendMetricPoint,
+  collectionCount,
+  metricMeta,
+  metricNumber,
+  metricText,
+  sanitizePreviewReport,
+} from '../lib/metric';
 import { useToast } from '../composables/useToast';
 
 const { toast } = useToast();
@@ -822,8 +845,13 @@ const isFetching = ref(false);
 
 const fullReport = ref<SystemFullReport | null>(null);
 
-function fullReportCount(items: readonly unknown[] | undefined): string | number {
-  return fullReport.value === null ? '—' : items?.length ?? 0;
+function providerStatusFor(sourcePart: string) {
+  const normalizedSource = sourcePart.toLowerCase();
+  return fullReport.value?.provider_status.find((status) => status.source.toLowerCase().includes(normalizedSource));
+}
+
+function fullReportCount(items: readonly unknown[] | undefined, sourcePart: string): string {
+  return collectionCount(items, providerStatusFor(sourcePart), fullReport.value !== null);
 }
 
 function metric<T>(value: T | null, unit: string, quality: MetricValue<T>['quality'] = 'Unavailable'): MetricValue<T> {
@@ -922,9 +950,11 @@ function appendOptionalMetricPoint(history: Array<number | null>, value: MetricV
     appendMetricPoint(history, value, MAX_POINTS);
     return;
   }
-  if (MAX_POINTS <= 0) return;
-  history.push(null);
-  while (history.length > MAX_POINTS) history.shift();
+  appendMetricGap(history, MAX_POINTS);
+}
+
+function appendGapsToDeviceHistories(historyById: Record<string, Array<number | null>>): void {
+  for (const history of Object.values(historyById)) appendMetricGap(history, MAX_POINTS);
 }
 
 function syncDeviceHistories<T extends { id: string }>(
@@ -1113,6 +1143,12 @@ async function fetchData() {
     syncDeviceHistories(gpuHistoryById.value, snap.gpus, (gpu) => gpu.utilization_percent);
     resetRemovedSelection();
   } catch (err) {
+    // IPC 失败也要推进时间轴，避免把上一采样点伪装成连续实时数据。
+    appendMetricGap(cpuHistory.value, MAX_POINTS);
+    appendMetricGap(memHistory.value, MAX_POINTS);
+    appendGapsToDeviceHistories(networkHistoryById.value);
+    appendGapsToDeviceHistories(diskHistoryById.value);
+    appendGapsToDeviceHistories(gpuHistoryById.value);
     console.error('获取硬件性能失败:', err);
   } finally {
     isFetching.value = false;
@@ -1140,7 +1176,8 @@ async function handleCopyReport() {
     if (isTauri()) {
       json = await invoke<string>('export_system_report', { sanitize: sanitizeExport.value });
     } else {
-      json = JSON.stringify(perfData.value, null, 2);
+      const previewData = sanitizeExport.value ? sanitizePreviewReport(perfData.value) : perfData.value;
+      json = JSON.stringify(previewData, null, 2);
     }
     await navigator.clipboard.writeText(json);
     toast.success('已复制诊断报告', sanitizeExport.value ? '已自动脱敏隐私并复制到剪贴板' : '原始完整报告已复制到剪贴板');
@@ -1155,7 +1192,8 @@ async function handleExportReport() {
     if (isTauri()) {
       json = await invoke<string>('export_system_report', { sanitize: sanitizeExport.value });
     } else {
-      json = JSON.stringify(perfData.value, null, 2);
+      const previewData = sanitizeExport.value ? sanitizePreviewReport(perfData.value) : perfData.value;
+      json = JSON.stringify(previewData, null, 2);
     }
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
