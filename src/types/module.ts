@@ -36,16 +36,13 @@ export interface ToolModule {
 }
 
 /**
- * 系统物理内存实时运行状态 (对齐 Rust 端 `MemoryStatus` 结构体)
+ * 旧版清理前后内存状态（仅保留给兼容的清理领域类型）。
+ * 实时 IPC `get_memory_status` 返回 `SystemMemoryInfo`。
  */
 export interface MemoryStatus {
-  /** 物理总内存 (字节) */
   total_ram: number;
-  /** 可用物理内存 (字节) */
   available_ram: number;
-  /** 已占用物理内存 (字节) */
   used_ram: number;
-  /** 内存占用百分比 (0.0 ~ 100.0) */
   usage_percent: number;
 }
 
@@ -64,11 +61,11 @@ export interface CleanResult {
   /** 清理后内存占用百分比 (0.0 ~ 100.0) */
   after_usage_percent: number;
   /** 释放的备用列表/待机缓存 (Standby Cache) 字节数 */
-  standby_freed_bytes?: number;
+  standby_freed_bytes: number;
   /** 清理模式描述 */
-  clean_mode?: string;
+  clean_mode: string;
   /** 执行时是否具备管理员权限 */
-  is_admin?: boolean;
+  is_admin: boolean;
 }
 
 /**
@@ -479,21 +476,21 @@ export interface NetworkAdapterInfo {
   mac_address: string;
   is_physical: boolean;
   oper_status: string;
-  link_speed_bps: number;
-  mtu: number;
+  link_speed_bps: MetricValue<number>;
+  mtu: MetricValue<number>;
   ipv4_addresses: string[];
   ipv6_addresses: string[];
   gateway: string;
   dns_servers: string[];
-  dhcp_enabled: boolean;
-  rx_speed_bps: number;
-  tx_speed_bps: number;
-  total_rx_bytes: number;
-  total_tx_bytes: number;
+  dhcp_enabled: MetricValue<boolean>;
+  rx_speed_bps: MetricValue<number>;
+  tx_speed_bps: MetricValue<number>;
+  total_rx_bytes: MetricValue<number>;
+  total_tx_bytes: MetricValue<number>;
 }
 
 export interface WiFiConnectionInfo {
-  is_connected: boolean;
+  is_connected: MetricValue<boolean>;
   ssid: MetricValue<string>;
   bssid: MetricValue<string>;
   signal_quality_percent: MetricValue<number>;
@@ -504,11 +501,11 @@ export interface WiFiConnectionInfo {
 }
 
 export interface NetworkConnectionsSummary {
-  tcp_established_count: number;
-  tcp_listening_count: number;
-  tcp_time_wait_count: number;
-  tcp_total_connections: number;
-  udp_endpoints_count: number;
+  tcp_established_count: MetricValue<number>;
+  tcp_listening_count: MetricValue<number>;
+  tcp_time_wait_count: MetricValue<number>;
+  tcp_total_connections: MetricValue<number>;
+  udp_endpoints_count: MetricValue<number>;
 }
 
 export interface NetworkSnapshot {
@@ -529,7 +526,7 @@ export interface DisplayDevice {
   orientation: string;
   position_x: number;
   position_y: number;
-  hdr_supported: boolean;
+  hdr_supported: MetricValue<boolean>;
 }
 
 export interface AudioDeviceInfo {
@@ -553,6 +550,7 @@ export interface PnpDeviceEntry {
   manufacturer: string;
   device_class: string;
   hardware_id: string;
+  instance_id: string;
   vendor_id?: string | null;
   product_id?: string | null;
   bus_type: string;
@@ -565,7 +563,7 @@ export interface DevicesSnapshot {
 }
 
 export interface BatteryPowerSnapshot {
-  has_battery: boolean;
+  has_battery: MetricValue<boolean>;
   ac_connected: MetricValue<boolean>;
   battery_percent: MetricValue<number>;
   charging_status: MetricValue<string>;
@@ -578,7 +576,7 @@ export interface ProcessSummaryItem {
   ppid: number;
   name: string;
   threads: number;
-  memory_working_set_bytes: number;
+  memory_working_set_bytes: MetricValue<number>;
 }
 
 export interface ProcessSnapshot {
@@ -596,9 +594,10 @@ export interface StartupEntry {
 
 export interface InstalledAppEntry {
   name: string;
-  version: string;
-  publisher: string;
-  install_date: string;
+  version: MetricValue<string>;
+  publisher: MetricValue<string>;
+  install_date: MetricValue<string>;
+  install_location: MetricValue<string>;
 }
 
 export interface SecurityStatusInfo {
@@ -627,9 +626,9 @@ export interface WindowsEnvSnapshot {
 
 export interface DevToolEntry {
   name: string;
-  installed: boolean;
-  version: string;
-  path?: string | null;
+  installed: MetricValue<boolean>;
+  version: MetricValue<string>;
+  path: MetricValue<string>;
 }
 
 export interface DevEnvironmentSnapshot {
@@ -650,11 +649,13 @@ export interface HardwareEventSummary {
 }
 
 export interface DiagnosticsSnapshot {
-  minidump_count: number;
+  minidump_count: MetricValue<number>;
   recent_crash_dumps: CrashDumpEntry[];
-  unexpected_shutdowns_count: number;
+  minidump_truncated: boolean;
+  unexpected_shutdowns_count: MetricValue<number>;
   whea_hardware_events: HardwareEventSummary[];
-  overall_health_assessment: string;
+  whea_hardware_events_status: CollectionStatus;
+  overall_health_assessment: MetricValue<string>;
 }
 
 export interface SystemFullReport {

@@ -55,7 +55,7 @@
 
         <div class="flex items-baseline gap-2 mb-2">
           <span class="text-3xl font-bold text-white tracking-tight">
-            {{ memUsagePercent }}%
+            {{ memUsagePercent }}
           </span>
           <span class="text-xs text-gray-400">已占用</span>
         </div>
@@ -65,13 +65,13 @@
           <div
             class="h-full rounded-full transition-all duration-500"
             :class="memProgressBarClass"
-            :style="{ width: `${memUsagePercent}%` }"
+            :style="{ width: memUsageWidth }"
           ></div>
         </div>
 
         <div class="flex justify-between text-xs text-gray-400">
-          <span>已用: {{ formatBytes(memoryInfo.used_ram) }}</span>
-          <span>总计: {{ formatBytes(memoryInfo.total_ram) }}</span>
+          <span>已用: {{ formatBytes(usedBytes) }}</span>
+          <span>总计: {{ formatBytes(totalBytes) }}</span>
         </div>
       </div>
 
@@ -176,20 +176,42 @@ import {
   RefreshCw,
 } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import type { MemoryStatus } from '../../types/module';
+import type { MetricValue, SystemMemoryInfo } from '../../types/module';
+import { metricNumber, metricState } from '../../lib/metric';
 import { useToast } from '../../composables/useToast';
 import { toolRegistry } from '../../registry';
 
 const { toast } = useToast();
 const loading = ref(false);
 
-// 内存数据响应式对象
-const memoryInfo = ref<MemoryStatus>({
-  total_ram: 16 * 1024 * 1024 * 1024,
-  available_ram: 9.5 * 1024 * 1024 * 1024,
-  used_ram: 6.5 * 1024 * 1024 * 1024,
-  usage_percent: 40.6,
-});
+// 实时 IPC 数据为空时不伪造 Tauri 指标；预览 mock 仅在非 Tauri 分支写入。
+const memoryInfo = ref<SystemMemoryInfo | null>(null);
+
+function previewMetric<T>(value: T | null, unit: string): MetricValue<T> {
+  return { value, unit, quality: 'Estimated', source: 'browser-preview', timestamp: Date.now(), error: null };
+}
+
+function previewMemoryInfo(): SystemMemoryInfo {
+  const total = 16 * 1024 * 1024 * 1024;
+  const used = 6.8 * 1024 * 1024 * 1024;
+  return {
+    total_physical_bytes: previewMetric(total, 'Bytes'),
+    available_physical_bytes: previewMetric(total - used, 'Bytes'),
+    used_physical_bytes: previewMetric(used, 'Bytes'),
+    usage_percent: previewMetric(42.5, '%'),
+    total_page_file_bytes: previewMetric<number>(null, 'Bytes'),
+    available_page_file_bytes: previewMetric<number>(null, 'Bytes'),
+    total_virtual_bytes: previewMetric<number>(null, 'Bytes'),
+    available_virtual_bytes: previewMetric<number>(null, 'Bytes'),
+    committed_bytes: previewMetric<number>(null, 'Bytes'),
+    commit_limit_bytes: previewMetric<number>(null, 'Bytes'),
+    paged_pool_bytes: previewMetric<number>(null, 'Bytes'),
+    non_paged_pool_bytes: previewMetric<number>(null, 'Bytes'),
+    hardware_reserved_bytes: previewMetric<number>(null, 'Bytes'),
+    dimms: [],
+    provider_status: { quality: 'Estimated', source: 'browser-preview', timestamp: Date.now(), item_count: null, truncated: false, error: null },
+  };
+}
 
 // 当前已注册的模块列表信息
 const registeredModulesInfo = computed(() => {
@@ -201,42 +223,46 @@ const registeredModulesInfo = computed(() => {
   }));
 });
 
-// 计算占用百分比展示
-const memUsagePercent = computed(() => {
-  return memoryInfo.value.usage_percent ? memoryInfo.value.usage_percent.toFixed(1) : '0.0';
-});
+// 统一通过 helper 读取富指标；无值展示破折号并停止算术。
+const usageValue = computed(() => metricNumber(memoryInfo.value?.usage_percent));
+const totalBytes = computed(() => metricNumber(memoryInfo.value?.total_physical_bytes));
+const usedBytes = computed(() => metricNumber(memoryInfo.value?.used_physical_bytes));
+const memUsagePercent = computed(() => (usageValue.value === null ? '—' : `${usageValue.value.toFixed(1)}%`));
+const memUsageWidth = computed(() => (usageValue.value === null ? '0%' : `${Math.min(100, Math.max(0, usageValue.value))}%`));
 
-// 内存健康度文本
 const memStatusText = computed(() => {
-  const percent = memoryInfo.value.usage_percent;
+  const state = metricState(memoryInfo.value?.usage_percent);
+  if (state === 'unsupported') return '暂不支持';
+  if (state === 'permission') return '权限不足';
+  if (state === 'error') return '读取失败/数据无效';
+  if (state === 'unavailable') return '暂不可用';
+  const percent = usageValue.value;
+  if (percent === null) return '暂不可用';
   if (percent >= 85) return '负载严重';
   if (percent >= 70) return '负载较高';
   return '状态良好';
 });
 
-// 内存状态徽标样式
 const memStatusClass = computed(() => {
-  const percent = memoryInfo.value.usage_percent;
+  const percent = usageValue.value;
+  if (percent === null) return 'bg-white/5 text-gray-400 border border-white/10';
   if (percent >= 85) return 'bg-rose-500/15 text-rose-400 border border-rose-500/30';
   if (percent >= 70) return 'bg-amber-500/15 text-amber-400 border border-amber-500/30';
   return 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
 });
 
-// 内存进度条颜色
 const memProgressBarClass = computed(() => {
-  const percent = memoryInfo.value.usage_percent;
+  const percent = usageValue.value;
+  if (percent === null) return 'bg-white/20';
   if (percent >= 85) return 'bg-gradient-to-r from-amber-500 to-rose-500';
   if (percent >= 70) return 'bg-gradient-to-r from-sky-500 to-amber-500';
   return 'bg-gradient-to-r from-blue-500 to-emerald-400';
 });
 
-/**
- * 转换字节数为适合阅读的 GB/MB
- */
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 GB';
-  const gb = bytes / (1024 * 1024 * 1024);
-  return `${gb.toFixed(1)} GB`;
+function formatBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes)) return '—';
+  if (bytes === 0) return '0 GB';
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 /**
@@ -246,17 +272,13 @@ async function refreshMemory() {
   loading.value = true;
   try {
     if (isTauri()) {
-      const status = await invoke<MemoryStatus>('get_memory_status');
+      const status = await invoke<SystemMemoryInfo>('get_memory_status');
       memoryInfo.value = status;
-      toast.success('状态已更新', `当前系统内存占用为 ${status.usage_percent.toFixed(1)}%`);
+      const usage = metricNumber(status.usage_percent);
+      toast.success('状态已更新', usage === null ? '当前系统内存占用暂不可用' : `当前系统内存占用为 ${usage.toFixed(1)}%`);
     } else {
-      // 浏览器纯开发环境模拟
-      memoryInfo.value = {
-        total_ram: 16 * 1024 * 1024 * 1024,
-        available_ram: 9.2 * 1024 * 1024 * 1024,
-        used_ram: 6.8 * 1024 * 1024 * 1024,
-        usage_percent: 42.5,
-      };
+      // 浏览器预览 mock 与真实 Tauri 分支明确隔离。
+      memoryInfo.value = previewMemoryInfo();
       toast.info('开发模式', '当前运行于浏览器预览环境，已模拟刷新数据');
     }
   } catch (err) {

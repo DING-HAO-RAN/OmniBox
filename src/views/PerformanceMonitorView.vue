@@ -89,8 +89,8 @@
                   <Cpu class="w-3.5 h-3.5" />
                   <span>CPU 处理器</span>
                 </div>
-                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">{{ perfData.cpu_usage_percent.toFixed(0) }}%</p>
-                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">{{ perfData.cpu_name }}</p>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">{{ formatMetricNumber(perfData.cpu.total_usage_percent, 0) }}%</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">{{ metricText(fullReport?.cpu_static.name) }}</p>
               </div>
               <div class="w-20 h-10 flex-shrink-0">
                 <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
@@ -113,9 +113,9 @@
                   <span>物理内存 (RAM)</span>
                 </div>
                 <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">
-                  {{ formatGb(perfData.memory.used_ram) }}/{{ formatGb(perfData.memory.total_ram) }} ({{ perfData.memory.usage_percent.toFixed(0) }}%)
+                  {{ formatGb(metricNumber(perfData.memory.used_physical_bytes)) }}/{{ formatGb(metricNumber(perfData.memory.total_physical_bytes)) }} ({{ formatMetricNumber(perfData.memory.usage_percent, 0) }}%)
                 </p>
-                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">已用 {{ (perfData.memory.used_ram / (1024*1024*1024)).toFixed(1) }} GB</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">已用 {{ formatGb(metricNumber(perfData.memory.used_physical_bytes)) }}</p>
               </div>
               <div class="w-20 h-10 flex-shrink-0">
                 <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
@@ -127,71 +127,68 @@
             <!-- 磁盘 -->
             <button
               v-for="disk in perfData.disks"
-              :key="disk.letter"
-              @click="activeDevice = 'disk:' + disk.letter"
+              :key="disk.id"
+              @click="activeDevice = 'disk:' + disk.id"
               type="button"
               class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-              :class="activeDevice === 'disk:' + disk.letter ? 'bg-emerald-600/15 border-emerald-500/50 shadow-lg shadow-emerald-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+              :class="activeDevice === 'disk:' + disk.id ? 'bg-emerald-600/15 border-emerald-500/50 shadow-lg shadow-emerald-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
             >
-              <span v-if="activeDevice === 'disk:' + disk.letter" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+              <span v-if="activeDevice === 'disk:' + disk.id" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
               <div class="min-w-0">
-                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'disk:' + disk.letter ? 'text-emerald-400' : 'text-gray-300'">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'disk:' + disk.id ? 'text-emerald-400' : 'text-gray-300'">
                   <HardDrive class="w-3.5 h-3.5" />
-                  <span>磁盘 ({{ disk.letter }})</span>
+                  <span>磁盘 ({{ metricText(disk.drive_letter) }})</span>
                 </div>
-                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">{{ disk.usage_percent }}% 已用</p>
-                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">{{ disk.label }} ({{ disk.file_system }})</p>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">{{ formatMetricNumber(disk.usage_percent) }}% 已用</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">{{ metricText(disk.label) }} ({{ metricText(disk.file_system) }})</p>
               </div>
               <div class="w-16 flex flex-col items-end gap-1 flex-shrink-0">
-                <span class="text-[9px] font-mono text-gray-400">{{ formatBytes(disk.available_bytes) }} 余</span>
+                <span class="text-[9px] font-mono text-gray-400">{{ formatBytes(metricNumber(disk.available_bytes)) }} 余</span>
                 <div class="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-                  <div class="h-full bg-emerald-500 rounded-full" :style="{ width: `${disk.usage_percent}%` }"></div>
+                  <div class="h-full bg-emerald-500 rounded-full" :style="{ width: metricPercentWidth(disk.usage_percent) }"></div>
                 </div>
               </div>
             </button>
 
-            <!-- 网络 -->
+            <!-- 网络适配器：每个真实适配器使用稳定 id 展示 -->
             <button
-              @click="activeDevice = 'network'"
+              v-for="adapter in perfData.network"
+              :key="adapter.id"
+              @click="activeDevice = 'network:' + adapter.id"
               type="button"
               class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-              :class="activeDevice === 'network' ? 'bg-amber-600/15 border-amber-500/50 shadow-lg shadow-amber-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+              :class="activeDevice === 'network:' + adapter.id ? 'bg-amber-600/15 border-amber-500/50 shadow-lg shadow-amber-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
             >
-              <span v-if="activeDevice === 'network'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]"></span>
+              <span v-if="activeDevice === 'network:' + adapter.id" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-amber-500"></span>
               <div class="min-w-0">
-                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'network' ? 'text-amber-400' : 'text-gray-300'">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'network:' + adapter.id ? 'text-amber-400' : 'text-gray-300'">
                   <Network class="w-3.5 h-3.5" />
-                  <span>以太网 / Wi-Fi</span>
+                  <span>{{ metricText(adapter.name) }}</span>
                 </div>
-                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}</p>
-                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]" :title="perfData.network.adapter_name">↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}</p>
-              </div>
-              <div class="w-20 h-10 flex-shrink-0">
-                <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 40">
-                  <polyline :points="buildPoints(netHistory, Math.max(1024*100, ...netHistory)).linePoints" fill="none" stroke="#f59e0b" stroke-width="1.5" />
-                </svg>
+                <p class="text-[11px] font-mono text-gray-400 mt-1 font-semibold">↓ {{ formatSpeed(adapter.rx_bytes_per_sec) }}</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5 max-w-[130px]">↑ {{ formatSpeed(adapter.tx_bytes_per_sec) }}</p>
               </div>
             </button>
 
-            <!-- GPU -->
+            <!-- GPU：多 GPU 逐项展示稳定 id -->
             <button
-              @click="activeDevice = 'gpu'"
+              v-for="gpu in perfData.gpus"
+              :key="gpu.id"
+              @click="activeDevice = 'gpu:' + gpu.id"
               type="button"
               class="w-full text-left rounded-2xl p-3.5 border transition-all flex items-center justify-between gap-3 relative group"
-              :class="activeDevice === 'gpu' ? 'bg-sky-600/15 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
+              :class="activeDevice === 'gpu:' + gpu.id ? 'bg-sky-600/15 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-white/[0.025] hover:bg-white/[0.05] border-white/10'"
             >
-              <span v-if="activeDevice === 'gpu'" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.8)]"></span>
+              <span v-if="activeDevice === 'gpu:' + gpu.id" class="absolute left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-sky-500"></span>
               <div class="min-w-0">
-                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'gpu' ? 'text-sky-400' : 'text-gray-300'">
+                <div class="flex items-center gap-1.5 text-xs font-bold" :class="activeDevice === 'gpu:' + gpu.id ? 'text-sky-400' : 'text-gray-300'">
                   <Monitor class="w-3.5 h-3.5" />
                   <span>GPU 图形卡</span>
                 </div>
-                <p class="text-[11px] text-gray-300 mt-1 font-semibold truncate max-w-[140px]" :title="perfData.gpu_name">{{ perfData.gpu_name }}</p>
-                <p class="text-[10px] text-gray-500 truncate mt-0.5">3D 硬件加速就绪</p>
+                <p class="text-[11px] text-gray-300 mt-1 font-semibold truncate max-w-[140px]">{{ metricText(gpu.name) }}</p>
+                <p class="text-[10px] text-gray-500 truncate mt-0.5">{{ formatMetricNumber(gpu.utilization_percent, 0) }}% 利用率</p>
               </div>
-              <div class="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 flex-shrink-0">
-                <Sparkles class="w-4 h-4" />
-              </div>
+              <Sparkles class="w-4 h-4 text-sky-400 flex-shrink-0" />
             </button>
           </div>
 
@@ -242,19 +239,19 @@
               <div v-if="activeDevice === 'cpu'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">利用率</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_usage_percent.toFixed(1) }}%</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatMetricNumber(perfData.cpu.total_usage_percent) }}%</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">物理核 / 线程数</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.physical_cores || 8 }} / {{ perfData.cpu_logical_cores }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatMetricNumber(fullReport?.cpu_static.physical_cores, 0) }} / {{ formatMetricNumber(fullReport?.cpu_static.logical_processors, 0) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">活跃进程数</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ perfData.cpu_detail?.process_count || 240 }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ fullReport?.processes?.total_processes ?? '—' }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">运行时间 (Uptime)</span>
-                  <p class="text-sm font-bold font-mono text-emerald-400">{{ perfData.cpu_detail?.uptime_formatted || '00:00:00' }}</p>
+                  <p class="text-sm font-bold font-mono text-emerald-400">{{ metricText(fullReport?.computer.uptime_formatted) }}</p>
                 </div>
               </div>
 
@@ -262,19 +259,19 @@
               <div v-else-if="activeDevice === 'memory'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">已用物理内存</span>
-                  <p class="text-sm font-bold font-mono text-purple-300">{{ formatBytes(perfData.memory.used_ram) }}</p>
+                  <p class="text-sm font-bold font-mono text-purple-300">{{ formatBytes(metricNumber(perfData.memory.used_physical_bytes)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">可用空闲内存</span>
-                  <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(perfData.memory.available_ram) }}</p>
+                  <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(metricNumber(perfData.memory.available_physical_bytes)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">已提交 (Committed)</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.memory_detail?.committed_bytes || perfData.memory.used_ram) }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(metricNumber(perfData.memory.committed_bytes)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">总物理容量</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.memory.total_ram) }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(metricNumber(perfData.memory.total_physical_bytes)) }}</p>
                 </div>
               </div>
 
@@ -282,39 +279,39 @@
               <div v-else-if="activeDevice.startsWith('disk:')" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">总容量</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(currentSelectedDisk?.total_bytes || 0) }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(metricNumber(currentSelectedDisk?.total_bytes)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">可用剩余</span>
-                  <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(currentSelectedDisk?.available_bytes || 0) }}</p>
+                  <p class="text-sm font-bold font-mono text-emerald-400">{{ formatBytes(metricNumber(currentSelectedDisk?.available_bytes)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">文件系统</span>
-                  <p class="text-sm font-bold font-mono text-sky-400">{{ currentSelectedDisk?.file_system }}</p>
+                  <p class="text-sm font-bold font-mono text-sky-400">{{ metricText(currentSelectedDisk?.file_system) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">引导盘</span>
-                  <p class="text-sm font-bold text-white">{{ currentSelectedDisk?.is_system_drive ? 'Windows 操作系统主盘' : '数据卷' }}</p>
+                  <p class="text-sm font-bold text-white">—</p>
                 </div>
               </div>
 
               <!-- 网络参数 -->
-              <div v-else-if="activeDevice === 'network'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div v-else-if="activeDevice.startsWith('network:')" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">瞬时下行速率</span>
-                  <p class="text-sm font-bold font-mono text-sky-400">↓ {{ formatSpeed(perfData.network.rx_speed_bps) }}</p>
+                  <p class="text-sm font-bold font-mono text-sky-400">↓ {{ formatSpeed(currentSelectedNetwork?.rx_bytes_per_sec) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">瞬时上行速率</span>
-                  <p class="text-sm font-bold font-mono text-amber-400">↑ {{ formatSpeed(perfData.network.tx_speed_bps) }}</p>
+                  <p class="text-sm font-bold font-mono text-amber-400">↑ {{ formatSpeed(currentSelectedNetwork?.tx_bytes_per_sec) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">累计接收流量</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.network.total_rx_bytes) }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(metricNumber(currentSelectedNetwork?.rx_bytes_total)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">累计发送流量</span>
-                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(perfData.network.total_tx_bytes) }}</p>
+                  <p class="text-sm font-bold font-mono text-white">{{ formatBytes(metricNumber(currentSelectedNetwork?.tx_bytes_total)) }}</p>
                 </div>
               </div>
 
@@ -322,19 +319,19 @@
               <div v-else-if="activeDevice === 'gpu'" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">图形接口</span>
-                  <p class="text-sm font-bold text-sky-400">DirectX 12 Ultimate</p>
+                  <p class="text-sm font-bold text-sky-400">—</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">驱动架构</span>
-                  <p class="text-sm font-bold text-white">WDDM 3.1</p>
+                  <p class="text-sm font-bold text-white">{{ metricText(currentSelectedGpu?.driver_version) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">显存机制</span>
-                  <p class="text-sm font-bold text-emerald-400">动态共享 / 独立显存</p>
+                  <p class="text-sm font-bold text-emerald-400">独立 {{ formatBytes(metricNumber(currentSelectedGpu?.dedicated_vram_bytes)) }} / 共享 {{ formatBytes(metricNumber(currentSelectedGpu?.shared_vram_bytes)) }}</p>
                 </div>
                 <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
                   <span class="text-[11px] text-gray-400">硬件加速</span>
-                  <p class="text-sm font-bold text-white">已就绪</p>
+                  <p class="text-sm font-bold text-white">{{ formatMetricNumber(currentSelectedGpu?.utilization_percent, 0) }}%</p>
                 </div>
               </div>
             </div>
@@ -348,9 +345,9 @@
             <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-bold text-gray-300">CPU 处理器</span>
-                <span class="text-lg font-bold font-mono text-blue-400">{{ perfData.cpu_usage_percent.toFixed(1) }}%</span>
+                <span class="text-lg font-bold font-mono text-blue-400">{{ formatMetricNumber(perfData.cpu.total_usage_percent) }}%</span>
               </div>
-              <p class="text-xs text-white font-semibold truncate">{{ perfData.cpu_name }}</p>
+              <p class="text-xs text-white font-semibold truncate">{{ metricText(fullReport?.cpu_static.name) }}</p>
               <div class="h-20 w-full bg-black/30 rounded-xl p-2 border border-white/5">
                 <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
                   <polyline :points="buildPoints(cpuHistory, 100).linePoints" fill="none" stroke="#3b82f6" stroke-width="2" />
@@ -362,9 +359,9 @@
             <div class="rounded-2xl p-5 bg-white/[0.025] border border-white/10 space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-bold text-gray-300">物理内存</span>
-                <span class="text-lg font-bold font-mono text-purple-400">{{ perfData.memory.usage_percent.toFixed(1) }}%</span>
+                <span class="text-lg font-bold font-mono text-purple-400">{{ formatMetricNumber(perfData.memory.usage_percent) }}%</span>
               </div>
-              <p class="text-xs text-white font-semibold truncate">{{ formatBytes(perfData.memory.used_ram) }} / {{ formatBytes(perfData.memory.total_ram) }}</p>
+              <p class="text-xs text-white font-semibold truncate">{{ formatBytes(metricNumber(perfData.memory.used_physical_bytes)) }} / {{ formatBytes(metricNumber(perfData.memory.total_physical_bytes)) }}</p>
               <div class="h-20 w-full bg-black/30 rounded-xl p-2 border border-white/5">
                 <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
                   <polyline :points="buildPoints(memHistory, 100).linePoints" fill="none" stroke="#a855f7" stroke-width="2" />
@@ -384,25 +381,25 @@
               <Cpu class="w-4 h-4 text-blue-400" />
               <h3 class="text-sm font-bold text-white">处理器指令集架构与拓扑 (CPUID)</h3>
             </div>
-            <span class="text-xs font-mono text-blue-400">{{ fullReport?.cpu_static?.name?.value || perfData.cpu_name }}</span>
+            <span class="text-xs font-mono text-blue-400">{{ metricText(fullReport?.cpu_static?.name) }}</span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">厂商 / 微架构</span>
-              <p class="font-bold text-white mt-0.5">{{ fullReport?.cpu_static?.vendor?.value || 'GenuineIntel/AMD' }}</p>
+              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.cpu_static?.vendor) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">家族 / 型号 / 步进</span>
-              <p class="font-bold font-mono text-white mt-0.5">Family {{ fullReport?.cpu_static?.family?.value || 6 }} · Model {{ fullReport?.cpu_static?.model?.value || 0 }} · Stepping {{ fullReport?.cpu_static?.stepping?.value || 0 }}</p>
+              <p class="font-bold font-mono text-white mt-0.5">Family {{ formatMetricNumber(fullReport?.cpu_static?.family, 0) }} · Model {{ formatMetricNumber(fullReport?.cpu_static?.model, 0) }} · Stepping {{ formatMetricNumber(fullReport?.cpu_static?.stepping, 0) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">L1 数据 / 指令缓存</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.cpu_static?.l1_data_cache_kb?.value || 384 }} KB / {{ fullReport?.cpu_static?.l1_inst_cache_kb?.value || 256 }} KB</p>
+              <p class="font-bold font-mono text-white mt-0.5">{{ formatMetricNumber(fullReport?.cpu_static?.l1_data_cache_kb, 0) }} KB / {{ formatMetricNumber(fullReport?.cpu_static?.l1_inst_cache_kb, 0) }} KB</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">L2 / L3 三级缓存</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ ((fullReport?.cpu_static?.l2_cache_kb?.value || 10240)/1024).toFixed(1) }} MB / {{ ((fullReport?.cpu_static?.l3_cache_kb?.value || 24576)/1024).toFixed(1) }} MB</p>
+              <p class="font-bold font-mono text-white mt-0.5">{{ formatMetricMb(fullReport?.cpu_static?.l2_cache_kb) }} MB / {{ formatMetricMb(fullReport?.cpu_static?.l3_cache_kb) }} MB</p>
             </div>
           </div>
 
@@ -411,7 +408,7 @@
             <span class="text-[11px] text-gray-400">支持的硬件指令集扩展:</span>
             <div class="flex flex-wrap gap-1.5">
               <span
-                v-for="feat in (fullReport?.cpu_static?.features || ['x86-64', 'MMX', 'SSE', 'SSE2', 'SSE3', 'SSSE3', 'SSE4.1', 'SSE4.2', 'AVX', 'AVX2', 'AES-NI', 'FMA3', 'POPCNT', 'BMI1', 'BMI2', 'ADX'])"
+                v-for="feat in (fullReport?.cpu_static?.features ?? [])"
                 :key="feat"
                 class="px-2 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20 text-[10px] font-mono font-medium"
               >
@@ -428,25 +425,25 @@
               <Layers class="w-4 h-4 text-purple-400" />
               <h3 class="text-sm font-bold text-white">主板与 BIOS / UEFI 固件</h3>
             </div>
-            <span class="text-xs text-purple-300">{{ fullReport?.motherboard?.product?.value || 'BaseBoard' }}</span>
+            <span class="text-xs text-purple-300">{{ metricText(fullReport?.motherboard?.product) }}</span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">主板制造商</span>
-              <p class="font-bold text-white mt-0.5">{{ fullReport?.motherboard?.manufacturer?.value || 'ASUS / MSI / Gigabyte' }}</p>
+              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.motherboard?.manufacturer) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">主板型号</span>
-              <p class="font-bold text-white mt-0.5">{{ fullReport?.motherboard?.product?.value || 'System Board' }}</p>
+              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.motherboard?.product) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">BIOS 厂商 & 版本</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.bios?.vendor?.value || 'AMI' }} {{ fullReport?.bios?.version?.value || '1.0' }}</p>
+              <p class="font-bold font-mono text-white mt-0.5">{{ metricText(fullReport?.bios?.vendor) }} {{ metricText(fullReport?.bios?.version) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">固件引导模式</span>
-              <p class="font-bold text-emerald-400 mt-0.5">{{ fullReport?.bios?.firmware_mode?.value || 'UEFI' }}</p>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ metricText(fullReport?.bios?.firmware_mode) }}</p>
             </div>
           </div>
         </section>
@@ -458,46 +455,46 @@
               <HardDrive class="w-4 h-4 text-emerald-400" />
               <h3 class="text-sm font-bold text-white">NVMe / SATA 物理磁盘硬件与 SMART 健康度</h3>
             </div>
-            <span class="text-xs text-emerald-400">共 {{ fullReport?.storage?.physical_disks?.length || 1 }} 块物理驱动器</span>
+            <span class="text-xs text-emerald-400">共 {{ fullReport?.storage?.physical_disks?.length ?? 0 }} 块物理驱动器</span>
           </div>
 
           <div class="space-y-3">
             <div
-              v-for="disk in (fullReport?.storage?.physical_disks || [])"
+              v-for="disk in (fullReport?.storage?.physical_disks ?? [])"
               :key="disk.id"
               class="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3"
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
                   <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-bold">
-                    {{ disk.bus_type?.value || 'NVMe' }}
+                    {{ metricText(disk.bus_type) }}
                   </span>
-                  <span class="text-xs font-bold text-white">{{ disk.model?.value || 'NVMe SSD' }}</span>
+                  <span class="text-xs font-bold text-white">{{ metricText(disk.model) }}</span>
                 </div>
-                <span class="text-xs font-mono text-gray-400">SN: {{ disk.serial_number?.value || 'N/A' }}</span>
+                <span class="text-xs font-mono text-gray-400">SN: {{ metricText(disk.serial_number) }}</span>
               </div>
 
               <!-- SMART 健康度核心指标网格 -->
               <div v-if="disk.smart_health" class="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs pt-1">
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">复合温度</span>
-                  <p class="text-xs font-bold font-mono text-emerald-400">{{ disk.smart_health.temperature_c?.value || 40 }} °C</p>
+                  <p class="text-xs font-bold font-mono text-emerald-400">{{ formatMetricNumber(disk.smart_health.temperature_c) }} °C</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">寿命已用 (Percentage Used)</span>
-                  <p class="text-xs font-bold font-mono text-white">{{ disk.smart_health.percentage_used?.value || 1 }}%</p>
+                  <p class="text-xs font-bold font-mono text-white">{{ formatMetricNumber(disk.smart_health.percentage_used) }}%</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">累计写入量 (TBW)</span>
-                  <p class="text-xs font-bold font-mono text-sky-400">{{ disk.smart_health.data_units_written_tb?.value || 12.5 }} TB</p>
+                  <p class="text-xs font-bold font-mono text-sky-400">{{ formatMetricNumber(disk.smart_health.data_units_written_tb) }} TB</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">通电时间</span>
-                  <p class="text-xs font-bold font-mono text-white">{{ disk.smart_health.power_on_hours?.value || 1800 }} 小时</p>
+                  <p class="text-xs font-bold font-mono text-white">{{ formatMetricNumber(disk.smart_health.power_on_hours, 0) }} 小时</p>
                 </div>
                 <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
                   <span class="text-[10px] text-gray-400">异常断电</span>
-                  <p class="text-xs font-bold font-mono text-amber-400">{{ disk.smart_health.unsafe_shutdowns?.value || 8 }} 次</p>
+                  <p class="text-xs font-bold font-mono text-amber-400">{{ formatMetricNumber(disk.smart_health.unsafe_shutdowns, 0) }} 次</p>
                 </div>
               </div>
             </div>
@@ -511,12 +508,12 @@
               <Layers class="w-4 h-4 text-purple-400" />
               <h3 class="text-sm font-bold text-white">物理内存条 (DIMM) 插槽与规格</h3>
             </div>
-            <span class="text-xs text-purple-300">已插入 {{ fullReport?.memory?.dimms?.length || 2 }} 根</span>
+            <span class="text-xs text-purple-300">已插入 {{ fullReport?.memory?.dimms?.length ?? 0 }} 根</span>
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div
-              v-for="dimm in (fullReport?.memory?.dimms || [])"
+              v-for="dimm in (fullReport?.memory?.dimms ?? [])"
               :key="dimm.slot"
               class="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-2 text-xs"
             >
@@ -542,9 +539,9 @@
                 <Monitor class="w-4 h-4 text-sky-400" />
                 <h3 class="text-xs font-bold text-white">显示设备</h3>
               </div>
-              <span class="text-[11px] text-gray-400">{{ fullReport?.media?.displays?.length || 1 }} 台显示器</span>
+              <span class="text-[11px] text-gray-400">{{ fullReport?.media?.displays?.length ?? 0 }} 台显示器</span>
             </div>
-            <div v-for="disp in (fullReport?.media?.displays || [])" :key="disp.id" class="p-3 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-1">
+            <div v-for="disp in (fullReport?.media?.displays ?? [])" :key="disp.id" class="p-3 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-1">
               <div class="flex items-center justify-between font-bold text-white">
                 <span>{{ disp.friendly_name }}</span>
                 <span class="text-sky-400 font-mono">{{ disp.width }} × {{ disp.height }} @ {{ disp.refresh_rate_hz }}Hz</span>
@@ -563,16 +560,16 @@
                 <BatteryCharging class="w-4 h-4 text-emerald-400" />
                 <h3 class="text-xs font-bold text-white">电池与电源状态</h3>
               </div>
-              <span class="text-[11px] text-emerald-400">{{ fullReport?.battery_power?.has_battery ? '便携设备' : '台式机' }}</span>
+              <span class="text-[11px] text-emerald-400">{{ metricBoolean(fullReport?.battery_power?.has_battery) === null ? '—' : metricBoolean(fullReport?.battery_power?.has_battery) ? '便携设备' : '台式机' }}</span>
             </div>
             <div class="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 text-xs space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-gray-400">供电模式:</span>
-                <span class="font-bold text-white">{{ fullReport?.battery_power?.charging_status?.value || '市电直接供电' }}</span>
+                <span class="font-bold text-white">{{ metricText(fullReport?.battery_power?.charging_status) }}</span>
               </div>
               <div class="flex items-center justify-between">
                 <span class="text-gray-400">当前电源计划:</span>
-                <span class="font-bold text-emerald-400">{{ fullReport?.battery_power?.power_scheme?.value || '平衡 (卓越性能)' }}</span>
+                <span class="font-bold text-emerald-400">{{ metricText(fullReport?.battery_power?.power_scheme) }}</span>
               </div>
             </div>
           </div>
@@ -590,19 +587,19 @@
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">产品版本</span>
-              <p class="font-bold text-white mt-0.5">{{ fullReport?.os?.name?.value || 'Windows 11' }}</p>
+              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.os?.name) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">内部版本号 (Build.UBR)</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.os?.build_number?.value || '22631' }}</p>
+              <p class="font-bold font-mono text-white mt-0.5">{{ metricText(fullReport?.os?.build_number) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">版本阶段 (Version)</span>
-              <p class="font-bold font-mono text-sky-400 mt-0.5">{{ fullReport?.os?.display_version?.value || '23H2' }}</p>
+              <p class="font-bold font-mono text-sky-400 mt-0.5">{{ metricText(fullReport?.os?.display_version) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">系统架构</span>
-              <p class="font-bold text-white mt-0.5">{{ fullReport?.os?.architecture?.value || 'x64' }}</p>
+              <p class="font-bold text-white mt-0.5">{{ metricText(fullReport?.os?.architecture) }}</p>
             </div>
           </div>
         </section>
@@ -615,19 +612,19 @@
           </h3>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div
-              v-for="tool in (fullReport?.dev_env?.tools || [])"
+              v-for="tool in (fullReport?.dev_env?.tools ?? [])"
               :key="tool.name"
               class="p-3 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between text-xs"
             >
               <div class="min-w-0 pr-2">
                 <span class="font-bold text-white block">{{ tool.name }}</span>
-                <span class="text-[11px] text-gray-400 truncate block mt-0.5">{{ tool.version }}</span>
+                <span class="text-[11px] text-gray-400 truncate block mt-0.5">{{ metricText(tool.version) }}</span>
               </div>
               <span
                 class="px-2 py-0.5 rounded text-[10px] font-medium flex-shrink-0"
-                :class="tool.installed ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-gray-500/10 text-gray-400 border border-gray-500/20'"
+                :class="metricBoolean(tool.installed) === true ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-gray-500/10 text-gray-400 border border-gray-500/20'"
               >
-                {{ tool.installed ? '已就绪' : '未检测到' }}
+                {{ metricBoolean(tool.installed) === null ? '—' : metricBoolean(tool.installed) ? '已就绪' : '未检测到' }}
               </span>
             </div>
           </div>
@@ -642,19 +639,19 @@
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">安全启动 (Secure Boot)</span>
-              <p class="font-bold text-emerald-400 mt-0.5">已开启并受信任</p>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ metricBooleanText(fullReport?.windows_env?.security_status?.secure_boot_enabled) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">TPM 芯片规格</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.windows_env?.security_status?.tpm_version?.value || 'TPM 2.0 (已就绪)' }}</p>
+              <p class="font-bold font-mono text-white mt-0.5">{{ metricText(fullReport?.windows_env?.security_status?.tpm_version) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">Windows Defender 实时扫描</span>
-              <p class="font-bold text-emerald-400 mt-0.5">运行中</p>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ metricBooleanText(fullReport?.windows_env?.security_status?.defender_realtime_protection) }}</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">Windows 防火墙</span>
-              <p class="font-bold text-emerald-400 mt-0.5">全域已防护</p>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ metricBooleanText(fullReport?.windows_env?.security_status?.firewall_public_enabled) }}</p>
             </div>
           </div>
         </section>
@@ -671,15 +668,15 @@
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">Minidump 崩溃转储文件</span>
-              <p class="font-bold font-mono text-emerald-400 mt-0.5">{{ fullReport?.diagnostics?.minidump_count || 0 }} 个</p>
+              <p class="font-bold font-mono text-emerald-400 mt-0.5">{{ formatMetricNumber(fullReport?.diagnostics?.minidump_count, 0) }} 个</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">异常关机记录</span>
-              <p class="font-bold font-mono text-white mt-0.5">{{ fullReport?.diagnostics?.unexpected_shutdowns_count || 0 }} 次</p>
+              <p class="font-bold font-mono text-white mt-0.5">{{ formatMetricNumber(fullReport?.diagnostics?.unexpected_shutdowns_count, 0) }} 次</p>
             </div>
             <div class="p-3 rounded-xl bg-white/[0.02] border border-white/5">
               <span class="text-[11px] text-gray-400">总体健康评估</span>
-              <p class="font-bold text-emerald-400 mt-0.5">{{ fullReport?.diagnostics?.overall_health_assessment || '优良 · 无未处理蓝屏' }}</p>
+              <p class="font-bold text-emerald-400 mt-0.5">{{ metricText(fullReport?.diagnostics?.overall_health_assessment) }}</p>
             </div>
           </div>
         </section>
@@ -754,7 +751,8 @@ import {
   LayoutGrid,
 } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import type { HardwarePerformance, DiskInfo, SystemFullReport } from '../types/module';
+import type { HardwarePerformance, MetricValue, RuntimeDiskInfo, RuntimeNetworkInfo, GpuDevice, SystemFullReport, SystemMemoryInfo } from '../types/module';
+import { metricNumber, metricText, appendMetricPoint } from '../lib/metric';
 import { useToast } from '../composables/useToast';
 
 const { toast } = useToast();
@@ -775,69 +773,113 @@ const isFetching = ref(false);
 
 const fullReport = ref<SystemFullReport | null>(null);
 
-const perfData = ref<HardwarePerformance>({
-  cpu_name: '检测中...',
-  cpu_logical_cores: 8,
-  cpu_usage_percent: 15.0,
-  gpu_name: '检测中...',
-  memory: {
-    total_ram: 16 * 1024 * 1024 * 1024,
-    available_ram: 8 * 1024 * 1024 * 1024,
-    used_ram: 8 * 1024 * 1024 * 1024,
-    usage_percent: 50.0,
-  },
-  disks: [],
-  network: {
-    adapter_name: '正在检测网卡...',
-    rx_speed_bps: 0,
-    tx_speed_bps: 0,
-    total_rx_bytes: 0,
-    total_tx_bytes: 0,
-  },
-});
+function metric<T>(value: T | null, unit: string, quality: MetricValue<T>['quality'] = 'Unavailable'): MetricValue<T> {
+  return { value, unit, quality, source: quality === 'Estimated' ? 'browser-preview' : 'frontend-empty', timestamp: Date.now(), error: null };
+}
 
+function emptyMemory(): SystemMemoryInfo {
+  return {
+    total_physical_bytes: metric<number>(null, 'Bytes'), available_physical_bytes: metric<number>(null, 'Bytes'), used_physical_bytes: metric<number>(null, 'Bytes'), usage_percent: metric<number>(null, '%'),
+    total_page_file_bytes: metric<number>(null, 'Bytes'), available_page_file_bytes: metric<number>(null, 'Bytes'), total_virtual_bytes: metric<number>(null, 'Bytes'), available_virtual_bytes: metric<number>(null, 'Bytes'), committed_bytes: metric<number>(null, 'Bytes'), commit_limit_bytes: metric<number>(null, 'Bytes'), paged_pool_bytes: metric<number>(null, 'Bytes'), non_paged_pool_bytes: metric<number>(null, 'Bytes'), hardware_reserved_bytes: metric<number>(null, 'Bytes'), dimms: [], provider_status: { quality: 'Unavailable', source: 'frontend-empty', timestamp: Date.now(), item_count: 0, truncated: false, error: null },
+  };
+}
+
+function emptyPerformance(): HardwarePerformance {
+  const cpuMetric = () => metric<number>(null, '%');
+  return { timestamp: Date.now(), cpu: { total_usage_percent: cpuMetric(), user_usage_percent: cpuMetric(), kernel_usage_percent: cpuMetric(), idle_percent: cpuMetric(), base_frequency_mhz: metric<number>(null, 'MHz'), current_frequency_mhz: metric<number>(null, 'MHz'), package_temperature_c: metric<number>(null, '°C'), package_power_watts: metric<number>(null, 'W') }, memory: emptyMemory(), gpus: [], disks: [], network: [], provider_status: [] };
+}
+
+function previewPerformance(): HardwarePerformance {
+  const total = 16 * 1024 * 1024 * 1024;
+  const used = 8 * 1024 * 1024 * 1024;
+  const now = Date.now();
+  return {
+    timestamp: now,
+    cpu: { total_usage_percent: metric(22, '%', 'Estimated'), user_usage_percent: metric(12, '%', 'Estimated'), kernel_usage_percent: metric(10, '%', 'Estimated'), idle_percent: metric(78, '%', 'Estimated'), base_frequency_mhz: metric(2400, 'MHz', 'Estimated'), current_frequency_mhz: metric(2400, 'MHz', 'Estimated'), package_temperature_c: metric<number>(null, '°C', 'Unsupported'), package_power_watts: metric<number>(null, 'W', 'Unsupported') },
+    memory: { ...emptyMemory(), total_physical_bytes: metric(total, 'Bytes', 'Estimated'), available_physical_bytes: metric(total - used, 'Bytes', 'Estimated'), used_physical_bytes: metric(used, 'Bytes', 'Estimated'), usage_percent: metric(50, '%', 'Estimated') },
+    gpus: [], disks: [], network: [], provider_status: [],
+  };
+}
+
+const perfData = ref<HardwarePerformance>(emptyPerformance());
 const MAX_POINTS = 60;
-const cpuHistory = ref<number[]>(new Array(MAX_POINTS).fill(15));
-const memHistory = ref<number[]>(new Array(MAX_POINTS).fill(50));
-const netHistory = ref<number[]>(new Array(MAX_POINTS).fill(0));
-const diskHistory = ref<number[]>(new Array(MAX_POINTS).fill(5));
+const cpuHistory = ref<Array<number | null>>([]);
+const memHistory = ref<Array<number | null>>([]);
+const netHistory = ref<Array<number | null>>([]);
+const diskHistory = ref<Array<number | null>>([]);
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 B';
+function formatBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes)) return '—';
+  if (bytes === 0) return '0 B';
   const gb = bytes / (1024 * 1024 * 1024);
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / (1024 * 1024);
-  return `${mb.toFixed(0)} MB`;
+  return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
 }
 
-function formatGb(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0.0 GB';
+function formatMetricMb(metricValue: MetricValue<number> | null | undefined): string {
+  const value = metricNumber(metricValue);
+  return value === null ? '—' : (value / 1024).toFixed(1);
+}
+
+function formatGb(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes)) return '—';
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function formatSpeed(bps: number): string {
-  if (!bps || bps <= 0) return '0 KB/s';
-  const kb = bps / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB/s`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(2)} MB/s`;
+function formatMetricNumber(metricValue: MetricValue<number> | null | undefined, digits = 1): string {
+  const value = metricNumber(metricValue);
+  return value === null ? '—' : value.toFixed(digits);
 }
 
-function buildPoints(history: number[], maxVal = 100) {
-  const step = 100 / (MAX_POINTS - 1);
+function metricBoolean(value: MetricValue<boolean> | null | undefined): boolean | null {
+  if (!value || (value.quality !== 'Good' && value.quality !== 'Estimated') || value.value === null) return null;
+  return value.value;
+}
+
+function metricBooleanText(value: MetricValue<boolean> | null | undefined): string {
+  const state = metricBoolean(value);
+  return state === null ? '—' : state ? '已开启' : '未开启';
+}
+
+function metricPercentWidth(value: MetricValue<number> | null | undefined): string {
+  const percent = metricNumber(value);
+  return percent === null ? '0%' : `${Math.min(100, Math.max(0, percent))}%`;
+}
+
+function formatSpeed(bps: MetricValue<number> | null | undefined): string {
+  const value = metricNumber(bps);
+  if (value === null) return '—';
+  if (value === 0) return '0 KB/s';
+  const kb = value / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB/s`;
+  return `${(kb / 1024).toFixed(2)} MB/s`;
+}
+
+function appendOptionalMetricPoint(history: Array<number | null>, value: MetricValue<number> | null | undefined): void {
+  if (value) {
+    appendMetricPoint(history, value, MAX_POINTS);
+    return;
+  }
+  if (MAX_POINTS <= 0) return;
+  history.push(null);
+  while (history.length > MAX_POINTS) history.shift();
+}
+
+function buildPoints(history: Array<number | null>, maxVal = 100) {
+  const step = 100 / Math.max(1, MAX_POINTS - 1);
   let lastX = 100;
   let lastY = 100;
 
+  const safeMax = Number.isFinite(maxVal) && maxVal > 0 ? maxVal : 1;
   const pts = history.map((val, idx) => {
     const x = idx * step;
-    const normalized = Math.min(maxVal, Math.max(0, val));
-    const y = 100 - (normalized / (maxVal || 1)) * 95;
-    if (idx === history.length - 1) {
-      lastX = x;
-      lastY = y;
-    }
+    if (val === null || !Number.isFinite(val)) return `${x.toFixed(1)},NaN`;
+    const normalized = Math.min(safeMax, Math.max(0, val));
+    const y = 100 - (normalized / safeMax) * 95;
+    lastX = x;
+    lastY = y;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
 
@@ -847,56 +889,70 @@ function buildPoints(history: number[], maxVal = 100) {
   return { linePoints, areaPoints, lastPoint: { x: lastX, y: lastY } };
 }
 
-const currentSelectedDisk = computed<DiskInfo | undefined>(() => {
-  if (activeDevice.value.startsWith('disk:')) {
-    const letter = activeDevice.value.replace('disk:', '');
-    return perfData.value.disks.find((d) => d.letter === letter) || perfData.value.disks[0];
-  }
-  return perfData.value.disks[0];
+const currentSelectedDisk = computed<RuntimeDiskInfo | undefined>(() => {
+  if (!activeDevice.value.startsWith('disk:')) return undefined;
+  const id = activeDevice.value.slice('disk:'.length);
+  return perfData.value.disks.find((disk) => disk.id === id);
 });
+
+const currentSelectedNetwork = computed<RuntimeNetworkInfo | undefined>(() => {
+  if (!activeDevice.value.startsWith('network:')) return undefined;
+  return perfData.value.network.find((adapter) => adapter.id === activeDevice.value.slice('network:'.length));
+});
+
+const currentSelectedGpu = computed<GpuDevice | undefined>(() => {
+  if (!activeDevice.value.startsWith('gpu:')) return undefined;
+  return perfData.value.gpus.find((gpu) => gpu.id === activeDevice.value.slice('gpu:'.length));
+});
+
+function resetRemovedSelection(): void {
+  if (activeDevice.value.startsWith('disk:') && !currentSelectedDisk.value) activeDevice.value = 'cpu';
+  if (activeDevice.value.startsWith('network:') && !currentSelectedNetwork.value) activeDevice.value = 'cpu';
+  if (activeDevice.value.startsWith('gpu:') && !currentSelectedGpu.value) activeDevice.value = 'cpu';
+}
 
 const currentSectionTitle = computed(() => {
   if (activeDevice.value === 'cpu') return '中央处理器 (CPU)';
   if (activeDevice.value === 'memory') return '系统物理内存 (Memory)';
   if (activeDevice.value.startsWith('disk:')) return '逻辑磁盘驱动器 (Disk)';
-  if (activeDevice.value === 'network') return '网络适配器 (Network)';
-  if (activeDevice.value === 'gpu') return '图形显示核心 (GPU)';
+  if (activeDevice.value.startsWith('network:')) return '网络适配器 (Network)';
+  if (activeDevice.value.startsWith('gpu:')) return '图形显示核心 (GPU)';
   return '硬件性能';
 });
 
 const currentDeviceHeaderName = computed(() => {
-  if (activeDevice.value === 'cpu') return perfData.value.cpu_name;
-  if (activeDevice.value === 'memory') return `总容量 ${formatBytes(perfData.value.memory.total_ram)}`;
-  if (activeDevice.value.startsWith('disk:')) return currentSelectedDisk.value?.label || '本地磁盘';
-  if (activeDevice.value === 'network') return perfData.value.network.adapter_name;
-  if (activeDevice.value === 'gpu') return perfData.value.gpu_name;
-  return '';
+  if (activeDevice.value === 'cpu') return metricText(fullReport.value?.cpu_static.name);
+  if (activeDevice.value === 'memory') return `总容量 ${formatBytes(metricNumber(perfData.value.memory.total_physical_bytes))}`;
+  if (activeDevice.value.startsWith('disk:')) return metricText(currentSelectedDisk.value?.label);
+  if (activeDevice.value.startsWith('network:')) return metricText(currentSelectedNetwork.value?.name);
+  if (activeDevice.value.startsWith('gpu:')) return metricText(currentSelectedGpu.value?.name);
+  return '—';
 });
 
 const currentPrimaryValue = computed(() => {
-  if (activeDevice.value === 'cpu') return `${perfData.value.cpu_usage_percent.toFixed(1)}%`;
-  if (activeDevice.value === 'memory') return `${(perfData.value.memory.used_ram / (1024*1024*1024)).toFixed(1)} GB`;
-  if (activeDevice.value.startsWith('disk:')) return `${currentSelectedDisk.value?.usage_percent || 0}%`;
-  if (activeDevice.value === 'network') return `↓ ${formatSpeed(perfData.value.network.rx_speed_bps)}`;
-  if (activeDevice.value === 'gpu') return 'DirectX 12';
-  return '';
+  if (activeDevice.value === 'cpu') return `${formatMetricNumber(perfData.value.cpu.total_usage_percent)}%`;
+  if (activeDevice.value === 'memory') return formatBytes(metricNumber(perfData.value.memory.used_physical_bytes));
+  if (activeDevice.value.startsWith('disk:')) return `${formatMetricNumber(currentSelectedDisk.value?.usage_percent)}%`;
+  if (activeDevice.value.startsWith('network:')) return `↓ ${formatSpeed(currentSelectedNetwork.value?.rx_bytes_per_sec)}`;
+  if (activeDevice.value.startsWith('gpu:')) return `${formatMetricNumber(currentSelectedGpu.value?.utilization_percent)}%`;
+  return '—';
 });
 
 const currentSecondaryValue = computed(() => {
-  if (activeDevice.value === 'cpu') return `${perfData.value.cpu_logical_cores} 个逻辑核心`;
-  if (activeDevice.value === 'memory') return `总共 ${formatGb(perfData.value.memory.total_ram)} (${perfData.value.memory.usage_percent.toFixed(0)}%)`;
-  if (activeDevice.value.startsWith('disk:')) return `剩余 ${formatBytes(currentSelectedDisk.value?.available_bytes || 0)}`;
-  if (activeDevice.value === 'network') return `↑ ${formatSpeed(perfData.value.network.tx_speed_bps)}`;
-  if (activeDevice.value === 'gpu') return '硬件加速已就绪';
-  return '';
+  if (activeDevice.value === 'cpu') return '实时 CPU 总利用率';
+  if (activeDevice.value === 'memory') return `总容量 ${formatBytes(metricNumber(perfData.value.memory.total_physical_bytes))} (${formatMetricNumber(perfData.value.memory.usage_percent, 0)}%)`;
+  if (activeDevice.value.startsWith('disk:')) return `剩余 ${formatBytes(metricNumber(currentSelectedDisk.value?.available_bytes))}`;
+  if (activeDevice.value.startsWith('network:')) return `↑ ${formatSpeed(currentSelectedNetwork.value?.tx_bytes_per_sec)}`;
+  if (activeDevice.value.startsWith('gpu:')) return 'GPU 利用率';
+  return '—';
 });
 
 const currentColorHex = computed(() => {
   if (activeDevice.value === 'cpu') return '#3b82f6';
   if (activeDevice.value === 'memory') return '#a855f7';
   if (activeDevice.value.startsWith('disk:')) return '#10b981';
-  if (activeDevice.value === 'network') return '#f59e0b';
-  if (activeDevice.value === 'gpu') return '#0ea5e9';
+  if (activeDevice.value.startsWith('network:')) return '#f59e0b';
+  if (activeDevice.value.startsWith('gpu:')) return '#0ea5e9';
   return '#3b82f6';
 });
 
@@ -904,21 +960,23 @@ const currentThemeColorClass = computed(() => {
   if (activeDevice.value === 'cpu') return 'text-blue-400';
   if (activeDevice.value === 'memory') return 'text-purple-400';
   if (activeDevice.value.startsWith('disk:')) return 'text-emerald-400';
-  if (activeDevice.value === 'network') return 'text-amber-400';
-  if (activeDevice.value === 'gpu') return 'text-sky-400';
+  if (activeDevice.value.startsWith('network:')) return 'text-amber-400';
+  if (activeDevice.value.startsWith('gpu:')) return 'text-sky-400';
   return 'text-blue-400';
 });
 
 const currentGradientId = computed(() => `grad-${activeDevice.value.replace(':', '-')}`);
 
+function historyMaximum(history: Array<number | null>, baseline: number): number {
+  const values = history.filter((value): value is number => value !== null && Number.isFinite(value));
+  return Math.max(baseline, ...values);
+}
+
+const networkScale = computed(() => historyMaximum(netHistory.value, 1024 * 100));
+
 const currentScaleTopLabel = computed(() => {
-  if (activeDevice.value === 'cpu' || activeDevice.value === 'memory' || activeDevice.value.startsWith('disk:')) {
-    return '100%';
-  }
-  if (activeDevice.value === 'network') {
-    const maxNet = Math.max(1024 * 100, ...netHistory.value);
-    return formatSpeed(maxNet);
-  }
+  if (activeDevice.value === 'cpu' || activeDevice.value === 'memory' || activeDevice.value.startsWith('disk:')) return '100%';
+  if (activeDevice.value.startsWith('network:')) return formatSpeed(metric(networkScale.value, 'Bytes/s', 'Estimated'));
   return '100%';
 });
 
@@ -926,9 +984,8 @@ const currentChartPoints = computed(() => {
   if (activeDevice.value === 'cpu') return buildPoints(cpuHistory.value, 100);
   if (activeDevice.value === 'memory') return buildPoints(memHistory.value, 100);
   if (activeDevice.value.startsWith('disk:')) return buildPoints(diskHistory.value, 100);
-  if (activeDevice.value === 'network') {
-    const maxNet = Math.max(1024 * 100, ...netHistory.value);
-    return buildPoints(netHistory.value, maxNet);
+  if (activeDevice.value.startsWith('network:')) {
+    return buildPoints(netHistory.value, networkScale.value);
   }
   return buildPoints(cpuHistory.value, 100);
 });
@@ -940,35 +997,19 @@ async function fetchData() {
     if (isTauri()) {
       const snap = await invoke<HardwarePerformance>('get_performance_snapshot');
       perfData.value = snap;
-
-      cpuHistory.value.push(snap.cpu_usage_percent);
-      if (cpuHistory.value.length > MAX_POINTS) cpuHistory.value.shift();
-
-      memHistory.value.push(snap.memory.usage_percent);
-      if (memHistory.value.length > MAX_POINTS) memHistory.value.shift();
-
-      netHistory.value.push(snap.network.rx_speed_bps);
-      if (netHistory.value.length > MAX_POINTS) netHistory.value.shift();
-
-      const diskPct = snap.disks[0]?.usage_percent || 0;
-      diskHistory.value.push(diskPct);
-      if (diskHistory.value.length > MAX_POINTS) diskHistory.value.shift();
+      appendOptionalMetricPoint(cpuHistory.value, snap.cpu.total_usage_percent);
+      appendOptionalMetricPoint(memHistory.value, snap.memory.usage_percent);
+      appendOptionalMetricPoint(netHistory.value, snap.network[0]?.rx_bytes_per_sec);
+      appendOptionalMetricPoint(diskHistory.value, snap.disks[0]?.usage_percent);
+      resetRemovedSelection();
     } else {
-      // 浏览器非 Tauri Mock
-      const rndCpu = Math.min(95, Math.max(5, 22 + (Math.random() - 0.5) * 15));
-      perfData.value.cpu_usage_percent = rndCpu;
-      cpuHistory.value.push(rndCpu);
-      if (cpuHistory.value.length > MAX_POINTS) cpuHistory.value.shift();
-
-      const rndMem = Math.min(95, Math.max(20, 52 + (Math.random() - 0.5) * 4));
-      perfData.value.memory.usage_percent = rndMem;
-      memHistory.value.push(rndMem);
-      if (memHistory.value.length > MAX_POINTS) memHistory.value.shift();
-
-      const rndNet = Math.floor(Math.random() * 1024 * 1024 * 3);
-      perfData.value.network.rx_speed_bps = rndNet;
-      netHistory.value.push(rndNet);
-      if (netHistory.value.length > MAX_POINTS) netHistory.value.shift();
+      // 浏览器预览 mock 与真实 Tauri 分支明确隔离。
+      perfData.value = previewPerformance();
+      appendOptionalMetricPoint(cpuHistory.value, perfData.value.cpu.total_usage_percent);
+      appendOptionalMetricPoint(memHistory.value, perfData.value.memory.usage_percent);
+      appendOptionalMetricPoint(netHistory.value, undefined);
+      appendOptionalMetricPoint(diskHistory.value, undefined);
+      resetRemovedSelection();
     }
   } catch (err) {
     console.error('获取硬件性能失败:', err);

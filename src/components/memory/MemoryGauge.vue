@@ -96,7 +96,7 @@
           <span class="text-4xl font-extrabold tracking-tighter">
             {{ displayPercent }}
           </span>
-          <span class="text-lg font-bold text-gray-400 ml-0.5">%</span>
+          <span v-if="usagePercent !== null" class="text-lg font-bold text-gray-400 ml-0.5">%</span>
         </div>
 
         <!-- 辅助副标题说明 -->
@@ -177,12 +177,13 @@
 
 import { computed } from 'vue';
 import { Server, Activity, Sparkles } from 'lucide-vue-next';
-import type { MemoryStatus } from '../../types/module';
+import type { SystemMemoryInfo } from '../../types/module';
+import { metricNumber } from '../../lib/metric';
 
 const props = withDefaults(
   defineProps<{
-    /** 内存运行状态数据 */
-    memoryInfo: MemoryStatus;
+    /** 内存运行状态数据；尚未取得真实指标时为空 */
+    memoryInfo: SystemMemoryInfo | null;
     /** 是否正处于刷新或清理中 */
     loading?: boolean;
   }>(),
@@ -195,27 +196,25 @@ const props = withDefaults(
 const RADIUS = 90;
 const circumference = 2 * Math.PI * RADIUS; // 约 565.4867
 
-// 规整后的内存使用百分比 (0 ~ 100)
-const usagePercent = computed(() => {
-  const p = props.memoryInfo.usage_percent;
-  if (typeof p !== 'number' || isNaN(p)) return 0;
-  return Math.min(100, Math.max(0, p));
-});
+// 通过 helper 读取使用率；无效指标不参与算术。
+const usagePercent = computed(() => metricNumber(props.memoryInfo?.usage_percent));
 
-// 展示用保留一位小数的百分比字符串
 const displayPercent = computed(() => {
-  return usagePercent.value.toFixed(1);
+  const percent = usagePercent.value;
+  return percent === null ? '—' : Math.min(100, Math.max(0, percent)).toFixed(1);
 });
 
-// 计算当前 stroke-dashoffset
+// 无值时显示空环，避免把缺失指标伪造成有效百分比。
 const dashOffset = computed(() => {
-  return circumference * (1 - usagePercent.value / 100);
+  const percent = usagePercent.value;
+  return percent === null ? circumference : circumference * (1 - Math.min(100, Math.max(0, percent)) / 100);
 });
 
 // 负荷等级划分：< 60% 健康；60% - 80% 中等；>= 80% 高负荷
 const loadLevel = computed<'healthy' | 'moderate' | 'high'>(() => {
-  if (usagePercent.value >= 80) return 'high';
-  if (usagePercent.value >= 60) return 'moderate';
+  const percent = usagePercent.value;
+  if (percent !== null && percent >= 80) return 'high';
+  if (percent !== null && percent >= 60) return 'moderate';
   return 'healthy';
 });
 
@@ -234,6 +233,7 @@ const gaugeGradientUrl = computed(() => {
 
 // 负荷状态文字标签
 const statusLabel = computed(() => {
+  if (usagePercent.value === null) return '暂不可用';
   switch (loadLevel.value) {
     case 'high':
       return '负载偏高';
@@ -247,6 +247,7 @@ const statusLabel = computed(() => {
 
 // 状态徽章样式类
 const badgeClass = computed(() => {
+  if (usagePercent.value === null) return 'bg-white/5 text-gray-400 border-white/10';
   switch (loadLevel.value) {
     case 'high':
       return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
@@ -260,6 +261,7 @@ const badgeClass = computed(() => {
 
 // 脉冲小圆点样式
 const pingDotClass = computed(() => {
+  if (usagePercent.value === null) return 'bg-gray-400';
   switch (loadLevel.value) {
     case 'high':
       return 'bg-rose-400';
@@ -273,6 +275,7 @@ const pingDotClass = computed(() => {
 
 // 背景呼吸光晕样式类
 const glowBgClass = computed(() => {
+  if (usagePercent.value === null) return 'bg-gray-500/20';
   switch (loadLevel.value) {
     case 'high':
       return 'bg-rose-500/20';
@@ -286,6 +289,7 @@ const glowBgClass = computed(() => {
 
 // 指标高亮文本与图标颜色
 const indicatorTextColor = computed(() => {
+  if (usagePercent.value === null) return 'text-gray-400';
   switch (loadLevel.value) {
     case 'high':
       return 'text-rose-400';
@@ -298,6 +302,7 @@ const indicatorTextColor = computed(() => {
 });
 
 const indicatorIconColor = computed(() => {
+  if (usagePercent.value === null) return 'text-gray-400';
   switch (loadLevel.value) {
     case 'high':
       return 'text-rose-400';
@@ -310,19 +315,23 @@ const indicatorIconColor = computed(() => {
 });
 
 // 格式化为 GB 保留两位小数
-function toGb(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0.00';
+function toGb(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes)) return '—';
   return (bytes / (1024 * 1024 * 1024)).toFixed(2);
 }
 
-const totalGb = computed(() => toGb(props.memoryInfo.total_ram));
-const usedGb = computed(() => toGb(props.memoryInfo.used_ram));
-const availableGb = computed(() => toGb(props.memoryInfo.available_ram));
+const totalBytes = computed(() => metricNumber(props.memoryInfo?.total_physical_bytes));
+const usedBytes = computed(() => metricNumber(props.memoryInfo?.used_physical_bytes));
+const availableBytes = computed(() => metricNumber(props.memoryInfo?.available_physical_bytes));
+const totalGb = computed(() => toGb(totalBytes.value));
+const usedGb = computed(() => toGb(usedBytes.value));
+const availableGb = computed(() => toGb(availableBytes.value));
 
-// 剩余可用百分比
+// 只有总量与可用量都有效时才计算剩余百分比。
 const availablePercent = computed(() => {
-  if (!props.memoryInfo.total_ram || props.memoryInfo.total_ram <= 0) return '0.0';
-  const pct = (props.memoryInfo.available_ram / props.memoryInfo.total_ram) * 100;
-  return Math.max(0, Math.min(100, pct)).toFixed(1);
+  const total = totalBytes.value;
+  const available = availableBytes.value;
+  if (total === null || available === null || total <= 0) return '—';
+  return Math.max(0, Math.min(100, (available / total) * 100)).toFixed(1);
 });
 </script>

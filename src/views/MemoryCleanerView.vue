@@ -264,7 +264,8 @@ import {
   Sparkles,
 } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import type { MemoryStatus, CleanResult } from '../types/module';
+import type { CleanResult, MetricValue, SystemMemoryInfo } from '../types/module';
+import { metricNumber, metricState } from '../lib/metric';
 import { useToast } from '../composables/useToast';
 import MemoryGauge from '../components/memory/MemoryGauge.vue';
 
@@ -272,13 +273,34 @@ const { toast } = useToast();
 
 const isAdmin = ref(false);
 
-// 内存指标响应式数据 (默认保底数值)
-const memoryInfo = ref<MemoryStatus>({
-  total_ram: 16 * 1024 * 1024 * 1024,
-  available_ram: 8.5 * 1024 * 1024 * 1024,
-  used_ram: 7.5 * 1024 * 1024 * 1024,
-  usage_percent: 46.8,
-});
+// 实时 Tauri 指标初始为空；浏览器 mock 只在非 Tauri 分支写入。
+const memoryInfo = ref<SystemMemoryInfo | null>(null);
+
+function previewMetric<T>(value: T | null, unit: string): MetricValue<T> {
+  return { value, unit, quality: 'Estimated', source: 'browser-preview', timestamp: Date.now(), error: null };
+}
+
+function previewMemoryInfo(usage = 46.8): SystemMemoryInfo {
+  const total = 16 * 1024 * 1024 * 1024;
+  const used = (total * usage) / 100;
+  return {
+    total_physical_bytes: previewMetric(total, 'Bytes'),
+    available_physical_bytes: previewMetric(total - used, 'Bytes'),
+    used_physical_bytes: previewMetric(used, 'Bytes'),
+    usage_percent: previewMetric(usage, '%'),
+    total_page_file_bytes: previewMetric<number>(null, 'Bytes'),
+    available_page_file_bytes: previewMetric<number>(null, 'Bytes'),
+    total_virtual_bytes: previewMetric<number>(null, 'Bytes'),
+    available_virtual_bytes: previewMetric<number>(null, 'Bytes'),
+    committed_bytes: previewMetric<number>(null, 'Bytes'),
+    commit_limit_bytes: previewMetric<number>(null, 'Bytes'),
+    paged_pool_bytes: previewMetric<number>(null, 'Bytes'),
+    non_paged_pool_bytes: previewMetric<number>(null, 'Bytes'),
+    hardware_reserved_bytes: previewMetric<number>(null, 'Bytes'),
+    dimms: [],
+    provider_status: { quality: 'Estimated', source: 'browser-preview', timestamp: Date.now(), item_count: null, truncated: false, error: null },
+  };
+}
 
 // 加载与清理执行中状态
 const isFetching = ref(false);
@@ -297,29 +319,37 @@ let pollIntervalId: ReturnType<typeof setInterval> | null = null;
  * 格式化 MB 释放容量显示
  */
 function formatFreed(mb: number): string {
-  if (!mb || mb <= 0) return '0 MB';
-  if (mb >= 1024) {
-    return `${(mb / 1024).toFixed(2)} GB`;
-  }
+  if (!Number.isFinite(mb)) return '—';
+  if (mb === 0) return '0 MB';
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
   return `${mb.toFixed(1)} MB`;
 }
 
 /**
  * 评估系统内存健康度
  */
+const usagePercent = computed(() => metricNumber(memoryInfo.value?.usage_percent));
+
 const healthScoreText = computed(() => {
-  const p = memoryInfo.value.usage_percent;
-  if (p < 55) return '状态极佳 · 物理资源充裕';
-  if (p < 75) return '负荷正常 · 适宜日常运行';
-  if (p < 90) return '负荷偏高 · 建议深度优化';
+  const state = metricState(memoryInfo.value?.usage_percent);
+  if (state === 'unsupported') return '暂不支持';
+  if (state === 'permission') return '权限不足';
+  if (state === 'error') return '读取失败/数据无效';
+  if (state === 'unavailable') return '暂不可用';
+  const percent = usagePercent.value;
+  if (percent === null) return '暂不可用';
+  if (percent < 55) return '状态极佳 · 物理资源充裕';
+  if (percent < 75) return '负荷正常 · 适宜日常运行';
+  if (percent < 90) return '负荷偏高 · 建议深度优化';
   return '严重受限 · 内存高度吃紧';
 });
 
 const healthScoreColor = computed(() => {
-  const p = memoryInfo.value.usage_percent;
-  if (p < 55) return 'text-emerald-400';
-  if (p < 75) return 'text-sky-400';
-  if (p < 90) return 'text-amber-400';
+  const percent = usagePercent.value;
+  if (percent === null) return 'text-gray-400';
+  if (percent < 55) return 'text-emerald-400';
+  if (percent < 75) return 'text-sky-400';
+  if (percent < 90) return 'text-amber-400';
   return 'text-rose-400';
 });
 
@@ -337,22 +367,15 @@ async function fetchMemoryStatus(silent = false) {
   }
   try {
     if (isTauri()) {
-      const status = await invoke<MemoryStatus>('get_memory_status');
+      const status = await invoke<SystemMemoryInfo>('get_memory_status');
       memoryInfo.value = status;
     } else {
-      // 浏览器非 Tauri 纯前端开发环境 Mock
-      const base = 16 * 1024 * 1024 * 1024;
-      const currentPct = memoryInfo.value.usage_percent;
-      // 模拟微幅动态波动
+      // 浏览器预览 mock 与真实 Tauri 分支明确隔离。
+      const currentPct = metricNumber(memoryInfo.value?.usage_percent);
+      const previewPct = currentPct === null ? 46.8 : currentPct;
       const delta = (Math.random() - 0.5) * 1.5;
-      const nextPct = Math.min(95, Math.max(20, currentPct + delta));
-      const used = (base * nextPct) / 100;
-      memoryInfo.value = {
-        total_ram: base,
-        used_ram: used,
-        available_ram: base - used,
-        usage_percent: nextPct,
-      };
+      const nextPct = Math.min(95, Math.max(20, previewPct + delta));
+      memoryInfo.value = previewMemoryInfo(nextPct);
     }
   } catch (err) {
     console.error('[Memory] 获取内存状态失败:', err);
@@ -369,7 +392,8 @@ async function fetchMemoryStatus(silent = false) {
  */
 async function handleManualRefresh() {
   await fetchMemoryStatus(false);
-  toast.info('内存状态已同步', `当前系统物理内存占用率为 ${memoryInfo.value.usage_percent.toFixed(1)}%`);
+  const usage = metricNumber(memoryInfo.value?.usage_percent);
+  toast.info('内存状态已同步', usage === null ? '当前系统物理内存占用率暂不可用' : `当前系统物理内存占用率为 ${usage.toFixed(1)}%`);
 }
 
 /**
@@ -387,33 +411,31 @@ async function handleCleanMemory() {
       result = await invoke<CleanResult>('clean_system_memory');
 
       // 2. 紧接着拉取最新系统内存状态，触发仪表盘平滑回落
-      const latestStatus = await invoke<MemoryStatus>('get_memory_status');
+      const latestStatus = await invoke<SystemMemoryInfo>('get_memory_status');
       memoryInfo.value = latestStatus;
     } else {
-      // 浏览器非 Tauri 纯前端开发环境模拟
+      // 浏览器预览 mock 与真实 Tauri 分支明确隔离。
       await new Promise((r) => setTimeout(r, 900));
 
-      const beforePct = memoryInfo.value.usage_percent;
-      const afterPct = Math.max(28.0, beforePct - 18.5);
+      const beforePct = metricNumber(memoryInfo.value?.usage_percent);
+      const safeBeforePct = beforePct === null ? 46.8 : beforePct;
+      const afterPct = Math.max(28.0, safeBeforePct - 18.5);
       const total = 16 * 1024 * 1024 * 1024;
-      const freedBytes = (total * (beforePct - afterPct)) / 100;
+      const freedBytes = (total * (safeBeforePct - afterPct)) / 100;
       const freedMb = freedBytes / (1024 * 1024);
 
       result = {
         freed_bytes: freedBytes,
         freed_mb: freedMb,
         processes_trimmed: 68,
-        before_usage_percent: beforePct,
+        before_usage_percent: safeBeforePct,
         after_usage_percent: afterPct,
+        standby_freed_bytes: 0,
+        clean_mode: '浏览器预览模拟',
+        is_admin: isAdmin.value,
       };
 
-      const newUsed = (total * afterPct) / 100;
-      memoryInfo.value = {
-        total_ram: total,
-        used_ram: newUsed,
-        available_ram: total - newUsed,
-        usage_percent: afterPct,
-      };
+      memoryInfo.value = previewMemoryInfo(afterPct);
     }
 
     // 记录优化成效
@@ -428,7 +450,7 @@ async function handleCleanMemory() {
     // 弹出优雅 Toast 反馈
     const freedText = formatFreed(result.freed_mb);
     toast.success(
-      result.clean_mode || '深度优化完成！',
+      result.clean_mode,
       `成功释放 ${freedText} 物理内存，修剪了 ${result.processes_trimmed} 个活跃进程工作集。`
     );
   } catch (err) {

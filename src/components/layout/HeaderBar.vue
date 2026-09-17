@@ -37,7 +37,7 @@
           ></span>
         </span>
         <span class="font-medium">
-          内存 {{ memoryCapsule.percent }}%
+          内存 {{ memoryCapsule.percent === null ? '—' : `${memoryCapsule.percent}%` }}
         </span>
         <span class="text-gray-500">|</span>
         <span class="text-gray-400">
@@ -91,7 +91,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Layers, Minus, Square, Copy, X } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
-import type { MemoryStatus } from '../../types/module';
+import type { SystemMemoryInfo } from '../../types/module';
+import { metricNumber } from '../../lib/metric';
 import { activeTool, setActiveTool } from '../../registry';
 
 // 窗口最大化状态标志
@@ -99,7 +100,7 @@ const isMaximized = ref(false);
 
 // 内存简报胶囊数据结构
 interface MemoryCapsuleData {
-  percent: number;
+  percent: number | null;
   availableGb: string;
 }
 
@@ -107,11 +108,11 @@ const memoryCapsule = ref<MemoryCapsuleData | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // 当前活跃工具的标题
-const activeToolTitle = computed(() => activeTool.value?.title || '主页');
+const activeToolTitle = computed(() => activeTool.value?.title ?? '主页');
 
 // 根据内存使用率计算胶囊指示灯色调
 const capsuleColorClass = computed(() => {
-  if (!memoryCapsule.value) return 'bg-emerald-400';
+  if (!memoryCapsule.value || memoryCapsule.value.percent === null) return 'bg-gray-500';
   const p = memoryCapsule.value.percent;
   if (p >= 85) return 'bg-rose-400';
   if (p >= 70) return 'bg-amber-400';
@@ -124,11 +125,12 @@ const capsuleColorClass = computed(() => {
 async function fetchMemoryCapsule() {
   try {
     if (isTauri()) {
-      const res = await invoke<MemoryStatus>('get_memory_status');
-      const gb = (res.available_ram / (1024 * 1024 * 1024)).toFixed(1);
+      const res = await invoke<SystemMemoryInfo>('get_memory_status');
+      const usage = metricNumber(res.usage_percent);
+      const available = metricNumber(res.available_physical_bytes);
       memoryCapsule.value = {
-        percent: Math.round(res.usage_percent),
-        availableGb: `${gb} GB`,
+        percent: usage === null ? null : Math.round(usage),
+        availableGb: available === null ? '—' : `${(available / (1024 * 1024 * 1024)).toFixed(1)} GB`,
       };
     } else {
       // 浏览器预览开发降级
