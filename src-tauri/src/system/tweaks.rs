@@ -23,9 +23,7 @@ pub struct SystemTweakItem {
 
 // 辅助函数：查询服务启动类型是否为禁用 (Disabled)
 fn is_service_disabled(service_name: &str) -> bool {
-    let output = Command::new("sc")
-        .args(["qc", service_name])
-        .output();
+    let output = Command::new("sc").args(["qc", service_name]).output();
     if let Ok(out) = output {
         let text = String::from_utf8_lossy(&out.stdout);
         text.contains("DISABLED")
@@ -43,7 +41,9 @@ fn set_service_state(service_name: &str, disable: bool) -> Result<(), String> {
             .output()
             .map_err(|e| format!("配置服务 [{service_name}] 失败: {e}"))?;
         if !status.status.success() {
-            return Err(format!("禁用服务 [{service_name}] 失败，可能需要管理员权限"));
+            return Err(format!(
+                "禁用服务 [{service_name}] 失败，可能需要管理员权限"
+            ));
         }
     } else {
         let status = Command::new("sc")
@@ -52,7 +52,9 @@ fn set_service_state(service_name: &str, disable: bool) -> Result<(), String> {
             .map_err(|e| format!("配置服务 [{service_name}] 失败: {e}"))?;
         let _ = Command::new("sc").args(["start", service_name]).output();
         if !status.status.success() {
-            return Err(format!("启用服务 [{service_name}] 失败，可能需要管理员权限"));
+            return Err(format!(
+                "启用服务 [{service_name}] 失败，可能需要管理员权限"
+            ));
         }
     }
     Ok(())
@@ -61,7 +63,10 @@ fn set_service_state(service_name: &str, disable: bool) -> Result<(), String> {
 // 辅助函数：设置注册表 DWORD 键值
 fn set_hklm_dword(subkey: &str, value_name: &str, value: u32) -> Result<(), String> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let val_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let val_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         let mut hkey: HKEY = std::ptr::null_mut();
@@ -82,14 +87,7 @@ fn set_hklm_dword(subkey: &str, value_name: &str, value: u32) -> Result<(), Stri
         }
 
         let val_bytes = value.to_ne_bytes();
-        let set_res = RegSetValueExW(
-            hkey,
-            val_wide.as_ptr(),
-            0,
-            REG_DWORD,
-            val_bytes.as_ptr(),
-            4,
-        );
+        let set_res = RegSetValueExW(hkey, val_wide.as_ptr(), 0, REG_DWORD, val_bytes.as_ptr(), 4);
         RegCloseKey(hkey);
 
         if set_res != 0 {
@@ -102,11 +100,21 @@ fn set_hklm_dword(subkey: &str, value_name: &str, value: u32) -> Result<(), Stri
 // 辅助函数：删除注册表键值
 fn delete_hklm_value(subkey: &str, value_name: &str) -> Result<(), String> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let val_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let val_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         let mut hkey: HKEY = std::ptr::null_mut();
-        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey_wide.as_ptr(), 0, KEY_WRITE, &mut hkey) == 0 {
+        if RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            subkey_wide.as_ptr(),
+            0,
+            KEY_WRITE,
+            &mut hkey,
+        ) == 0
+        {
             let _ = RegDeleteValueW(hkey, val_wide.as_ptr());
             RegCloseKey(hkey);
         }
@@ -117,11 +125,21 @@ fn delete_hklm_value(subkey: &str, value_name: &str) -> Result<(), String> {
 // 辅助函数：查询注册表 DWORD 是否为指定数值
 fn query_hklm_dword_equals(subkey: &str, value_name: &str, expected: u32) -> bool {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let val_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let val_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         let mut hkey: HKEY = std::ptr::null_mut();
-        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey_wide.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+        if RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            subkey_wide.as_ptr(),
+            0,
+            KEY_READ,
+            &mut hkey,
+        ) != 0
+        {
             return false;
         }
 
@@ -152,11 +170,22 @@ fn is_hibernation_disabled() -> bool {
 pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
     // 1. Windows 自动更新
     let update_disabled = is_service_disabled("wuauserv")
-        || query_hklm_dword_equals("SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate", 1);
+        || query_hklm_dword_equals(
+            "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+            "NoAutoUpdate",
+            1,
+        );
 
     // 2. Windows Defender 实时监控
-    let defender_disabled = query_hklm_dword_equals("SOFTWARE\\Policies\\Microsoft\\Windows Defender", "DisableAntiSpyware", 1)
-        || query_hklm_dword_equals("SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring", 1);
+    let defender_disabled = query_hklm_dword_equals(
+        "SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        "DisableAntiSpyware",
+        1,
+    ) || query_hklm_dword_equals(
+        "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        "DisableRealtimeMonitoring",
+        1,
+    );
 
     // 3. Windows Search 搜索索引
     let search_disabled = is_service_disabled("WSearch");
@@ -169,16 +198,25 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
 
     // 6. 遥测与诊断数据
     let telemetry_disabled = is_service_disabled("DiagTrack")
-        || query_hklm_dword_equals("SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "AllowTelemetry", 0);
+        || query_hklm_dword_equals(
+            "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+            "AllowTelemetry",
+            0,
+        );
 
     // 7. 任务栏小组件与资讯
-    let widgets_disabled = query_hklm_dword_equals("SOFTWARE\\Policies\\Microsoft\\Dsh", "AllowNewsAndInterests", 0);
+    let widgets_disabled = query_hklm_dword_equals(
+        "SOFTWARE\\Policies\\Microsoft\\Dsh",
+        "AllowNewsAndInterests",
+        0,
+    );
 
     vec![
         SystemTweakItem {
             id: "windows_update".to_string(),
             title: "Windows 自动更新".to_string(),
-            description: "彻底拦截并禁用 Windows Update 强制后台下载、打补丁与自动重启更新行为。".to_string(),
+            description: "彻底拦截并禁用 Windows Update 强制后台下载、打补丁与自动重启更新行为。"
+                .to_string(),
             impact: "杜绝打扰 · 锁定稳定版本".to_string(),
             is_disabled: update_disabled,
             requires_admin: true,
@@ -186,7 +224,8 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
         SystemTweakItem {
             id: "windows_defender".to_string(),
             title: "Windows Defender 安全中心实时防护".to_string(),
-            description: "关闭 Defender 后台实时扫描与 Antimalware Service 进程的高 CPU/磁盘占用。".to_string(),
+            description: "关闭 Defender 后台实时扫描与 Antimalware Service 进程的高 CPU/磁盘占用。"
+                .to_string(),
             impact: "显著降低 CPU 占用 · 防止误报拦截".to_string(),
             is_disabled: defender_disabled,
             requires_admin: true,
@@ -194,7 +233,9 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
         SystemTweakItem {
             id: "hibernation".to_string(),
             title: "系统休眠功能 (hiberfil.sys)".to_string(),
-            description: "关闭系统深度休眠，彻底删除 C 盘根目录下与物理内存同等大小的巨大休眠文件。".to_string(),
+            description:
+                "关闭系统深度休眠，彻底删除 C 盘根目录下与物理内存同等大小的巨大休眠文件。"
+                    .to_string(),
             impact: "立即释放 8GB ~ 32GB 磁盘空间".to_string(),
             is_disabled: hibernate_disabled,
             requires_admin: true,
@@ -202,7 +243,9 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
         SystemTweakItem {
             id: "windows_search".to_string(),
             title: "Windows 搜索索引服务 (WSearch)".to_string(),
-            description: "关闭后台全盘文件检索与数据库频繁读写，解决机械硬盘或低配系统 100% 磁盘占用问题。".to_string(),
+            description:
+                "关闭后台全盘文件检索与数据库频繁读写，解决机械硬盘或低配系统 100% 磁盘占用问题。"
+                    .to_string(),
             impact: "缓解磁盘 100% 卡顿".to_string(),
             is_disabled: search_disabled,
             requires_admin: true,
@@ -210,7 +253,9 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
         SystemTweakItem {
             id: "sysmain".to_string(),
             title: "SysMain (SuperFetch) 预加载服务".to_string(),
-            description: "禁用 Windows 自动在后台将常用软件填满物理内存的预取行为，降低内存常驻压力。".to_string(),
+            description:
+                "禁用 Windows 自动在后台将常用软件填满物理内存的预取行为，降低内存常驻压力。"
+                    .to_string(),
             impact: "减少后台读写 · 避免内存占用虚高".to_string(),
             is_disabled: sysmain_disabled,
             requires_admin: true,
@@ -218,7 +263,8 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
         SystemTweakItem {
             id: "telemetry".to_string(),
             title: "诊断数据与用户体验遥测 (DiagTrack)".to_string(),
-            description: "禁用微软后台遥测、键盘打字数据收集与使用习惯上传服务，守护个人数据隐私。".to_string(),
+            description: "禁用微软后台遥测、键盘打字数据收集与使用习惯上传服务，守护个人数据隐私。"
+                .to_string(),
             impact: "杜绝隐私回传 · 减少后台进程".to_string(),
             is_disabled: telemetry_disabled,
             requires_admin: true,
@@ -226,7 +272,9 @@ pub fn get_all_tweaks() -> Vec<SystemTweakItem> {
         SystemTweakItem {
             id: "widgets".to_string(),
             title: "任务栏小组件与资讯看板".to_string(),
-            description: "关闭 Windows 11 任务栏左侧天气资讯小组件及其依赖的后台 Edge Webview 进程。".to_string(),
+            description:
+                "关闭 Windows 11 任务栏左侧天气资讯小组件及其依赖的后台 Edge Webview 进程。"
+                    .to_string(),
             impact: "节省内存常驻 · 净化任务栏".to_string(),
             is_disabled: widgets_disabled,
             requires_admin: true,
@@ -241,18 +289,39 @@ pub fn toggle_tweak(id: &str, disable: bool) -> Result<(), String> {
             let _ = set_service_state("wuauserv", disable);
             let _ = set_service_state("WaaSMedicSvc", disable);
             if disable {
-                set_hklm_dword("SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate", 1)?;
+                set_hklm_dword(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+                    "NoAutoUpdate",
+                    1,
+                )?;
             } else {
-                let _ = delete_hklm_value("SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate");
+                let _ = delete_hklm_value(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+                    "NoAutoUpdate",
+                );
             }
         }
         "windows_defender" => {
             if disable {
-                set_hklm_dword("SOFTWARE\\Policies\\Microsoft\\Windows Defender", "DisableAntiSpyware", 1)?;
-                set_hklm_dword("SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring", 1)?;
+                set_hklm_dword(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+                    "DisableAntiSpyware",
+                    1,
+                )?;
+                set_hklm_dword(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+                    "DisableRealtimeMonitoring",
+                    1,
+                )?;
             } else {
-                let _ = delete_hklm_value("SOFTWARE\\Policies\\Microsoft\\Windows Defender", "DisableAntiSpyware");
-                let _ = delete_hklm_value("SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring");
+                let _ = delete_hklm_value(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+                    "DisableAntiSpyware",
+                );
+                let _ = delete_hklm_value(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+                    "DisableRealtimeMonitoring",
+                );
             }
         }
         "hibernation" => {
@@ -274,16 +343,30 @@ pub fn toggle_tweak(id: &str, disable: bool) -> Result<(), String> {
         "telemetry" => {
             let _ = set_service_state("DiagTrack", disable);
             if disable {
-                set_hklm_dword("SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "AllowTelemetry", 0)?;
+                set_hklm_dword(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+                    "AllowTelemetry",
+                    0,
+                )?;
             } else {
-                let _ = delete_hklm_value("SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection", "AllowTelemetry");
+                let _ = delete_hklm_value(
+                    "SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+                    "AllowTelemetry",
+                );
             }
         }
         "widgets" => {
             if disable {
-                set_hklm_dword("SOFTWARE\\Policies\\Microsoft\\Dsh", "AllowNewsAndInterests", 0)?;
+                set_hklm_dword(
+                    "SOFTWARE\\Policies\\Microsoft\\Dsh",
+                    "AllowNewsAndInterests",
+                    0,
+                )?;
             } else {
-                let _ = delete_hklm_value("SOFTWARE\\Policies\\Microsoft\\Dsh", "AllowNewsAndInterests");
+                let _ = delete_hklm_value(
+                    "SOFTWARE\\Policies\\Microsoft\\Dsh",
+                    "AllowNewsAndInterests",
+                );
             }
         }
         _ => return Err(format!("未知的调优项目: {id}")),

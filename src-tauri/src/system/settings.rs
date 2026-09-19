@@ -80,8 +80,8 @@ pub fn set_auto_start_status(enable: bool) -> Result<(), String> {
         }
 
         if enable {
-            let current_exe = env::current_exe()
-                .map_err(|e| format!("获取当前可执行文件路径失败: {e}"))?;
+            let current_exe =
+                env::current_exe().map_err(|e| format!("获取当前可执行文件路径失败: {e}"))?;
             let exe_str = current_exe.to_string_lossy();
             let quoted_exe = format!("\"{}\"", exe_str);
             let exe_wide: Vec<u16> = quoted_exe
@@ -114,18 +114,14 @@ pub fn set_auto_start_status(enable: bool) -> Result<(), String> {
 
 /// 以 Windows 管理员身份重新启动当前程序
 pub fn restart_as_admin() -> Result<(), String> {
-    let current_exe = env::current_exe()
-        .map_err(|e| format!("获取当前程序路径失败: {e}"))?;
+    let current_exe = env::current_exe().map_err(|e| format!("获取当前程序路径失败: {e}"))?;
     let exe_wide: Vec<u16> = current_exe
         .to_string_lossy()
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
 
-    let verb_wide: Vec<u16> = "runas"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let verb_wide: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
 
     unsafe {
         let mut sei = SHELLEXECUTEINFOW {

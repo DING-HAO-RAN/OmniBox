@@ -15,6 +15,7 @@ import SettingsView from '../views/SettingsView.vue';
 import PerformanceMonitorView from '../views/PerformanceMonitorView.vue';
 import SystemToolsView from '../views/SystemToolsView.vue';
 import SystemTweaksView from '../views/SystemTweaksView.vue';
+import SessionMigratorView from '../views/SessionMigratorView.vue';
 
 /**
  * 分类元数据信息定义
@@ -194,7 +195,18 @@ registerTool({
   order: 7,
 });
 
-// 8. Markdown 实时预览与 PDF 导出工作区
+// 8. 跨设备浏览器会话迁移与免密登录器 (Bilibili/通用网站会话登录器)
+registerTool({
+  id: 'session-migrator',
+  title: 'B站/会话登录器',
+  description: '跨设备浏览器会话迁移与免密快速登录器',
+  iconName: 'Share2',
+  category: 'efficiency',
+  component: SessionMigratorView,
+  order: 8,
+});
+
+// 9. Markdown 实时预览与 PDF 导出工作区
 registerTool({
   id: 'markdown-pdf',
   title: 'Markdown 转 PDF',
@@ -202,7 +214,7 @@ registerTool({
   iconName: 'FileDown',
   category: 'dev',
   component: MarkdownPdfView,
-  order: 8,
+  order: 9,
 });
 
 // 9. 通用配置中心 (单独固定在左侧栏最底部)

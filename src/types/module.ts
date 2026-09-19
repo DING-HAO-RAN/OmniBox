@@ -681,6 +681,70 @@ export interface SystemFullReport {
 }
 
 /**
+ * 正在运行的 CDP 浏览器状态
+ */
+export interface RunningBrowserInfo {
+  browser: string;
+  endpoint: string;
+  port: number;
+  profile_dir: string;
+  pid: number;
+  browser_version: string;
+  is_running: boolean;
+}
+
+/**
+ * 会话迁移器默认配置
+ */
+export interface SessionMigratorDefaults {
+  default_chrome_profile: string;
+  default_edge_profile: string;
+  sessions_dir: string;
+  default_domain: string;
+  default_site_url: string;
+  default_port: number;
+}
+
+/**
+ * 单条 Cookie 记录结构
+ */
+export interface CookieRecord {
+  domain: string;
+  path: string;
+  name: string;
+  value: string;
+  expirationDate?: number | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite?: string | null;
+}
+
+/**
+ * 导出环境元数据
+ */
+export interface ExportMetadata {
+  exportedAt: string;
+  operatingSystem: string;
+  browser: string;
+  browserVersion: string;
+  userAgent: string;
+  acceptLanguage: string;
+  timezone: string;
+  screenResolution: string;
+}
+
+/**
+ * 会话打包 Bundle 结构体 (bsm/session-bundle/v1)
+ */
+export interface SessionBundle {
+  schema: string;
+  targetDomain: string;
+  siteUrl: string;
+  metadata: ExportMetadata;
+  cookies: CookieRecord[];
+}
+
+/**
  * 系统内置工具 (对齐 Rust 端 `SystemToolItem`)
  */
 export interface SystemToolItem {

@@ -86,7 +86,6 @@ pub fn get_system_tools_list() -> Vec<SystemToolItem> {
             command: "fsmgmt.msc".to_string(),
             icon_name: "FolderSymlink".to_string(),
         },
-
         // ================= 性能与诊断 =================
         SystemToolItem {
             id: "resmon".to_string(),
@@ -128,7 +127,6 @@ pub fn get_system_tools_list() -> Vec<SystemToolItem> {
             command: "msinfo32.exe".to_string(),
             icon_name: "Info".to_string(),
         },
-
         // ================= 系统配置与优化 =================
         SystemToolItem {
             id: "msconfig".to_string(),
@@ -141,7 +139,9 @@ pub fn get_system_tools_list() -> Vec<SystemToolItem> {
         SystemToolItem {
             id: "sysprop".to_string(),
             name: "高级系统属性 & 环境变量".to_string(),
-            description: "快速编辑系统 PATH 环境变量、虚拟内存与系统保护 (SystemPropertiesAdvanced)".to_string(),
+            description:
+                "快速编辑系统 PATH 环境变量、虚拟内存与系统保护 (SystemPropertiesAdvanced)"
+                    .to_string(),
             category: "config".to_string(),
             command: "SystemPropertiesAdvanced.exe".to_string(),
             icon_name: "Variable".to_string(),
@@ -162,7 +162,6 @@ pub fn get_system_tools_list() -> Vec<SystemToolItem> {
             command: "cleanmgr.exe".to_string(),
             icon_name: "Sparkles".to_string(),
         },
-
         // ================= 网络与安全终端 =================
         SystemToolItem {
             id: "wf".to_string(),

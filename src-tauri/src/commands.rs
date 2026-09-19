@@ -428,6 +428,88 @@ pub fn choose_any_file() -> Result<Option<String>, String> {
 }
 
 // ==========================================
+// 浏览器会话迁移器 (Browser Session Migrator / Bilibili 登录器) 命令
+// ==========================================
+
+/// 获取会话迁移器默认配置
+#[tauri::command]
+pub fn session_migrator_get_defaults() -> Result<crate::session_migrator::SessionMigratorDefaults, String> {
+    Ok(crate::session_migrator::get_defaults())
+}
+
+/// 启动本地独立 CDP 浏览器
+#[tauri::command]
+pub fn session_migrator_launch_cdp(browser: String, port: u16, profile_dir: String) -> Result<crate::session_migrator::types::RunningBrowserInfo, String> {
+    crate::session_migrator::launch_local_cdp(&browser, port, &profile_dir)
+}
+
+/// 停止当前 CDP 浏览器
+#[tauri::command]
+pub fn session_migrator_stop_cdp() -> Result<(), String> {
+    crate::session_migrator::stop_local_cdp()
+}
+
+/// 获取当前运行中的 CDP 浏览器状态
+#[tauri::command]
+pub fn session_migrator_get_cdp_status() -> Result<Option<crate::session_migrator::types::RunningBrowserInfo>, String> {
+    Ok(crate::session_migrator::get_running_cdp_status())
+}
+
+/// 生成桌面启动脚本 (.cmd)
+#[tauri::command]
+pub fn session_migrator_create_launcher(browser: String, port: u16, profile_dir: String, dest_path: Option<String>) -> Result<String, String> {
+    crate::session_migrator::write_profile_launcher_cmd(&browser, port, &profile_dir, &dest_path.unwrap_or_default())
+}
+
+/// 选择浏览器配置目录
+#[tauri::command]
+pub fn session_migrator_choose_profile_dir() -> Result<Option<String>, String> {
+    Ok(crate::session_migrator::choose_directory_dialog())
+}
+
+/// 打开会话默认存储目录 (sessions)
+#[tauri::command]
+pub fn session_migrator_open_sessions_dir() -> Result<(), String> {
+    crate::session_migrator::open_sessions_folder()
+}
+
+/// 选择会话 JSON 文件 (打开/保存)
+#[tauri::command]
+pub fn session_migrator_choose_file(mode: String) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let dialog_mode = match mode.as_str() {
+            "save_extension" => FileDialogMode::SaveExtensionSession,
+            "save" => FileDialogMode::SaveSession,
+            _ => FileDialogMode::OpenSession,
+        };
+        Ok(choose_file_path(dialog_mode))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// 写入加密会话文件并返回计算出的 SHA-256 校验和
+#[tauri::command]
+pub fn session_migrator_write_file(path: String, content: String) -> Result<String, String> {
+    crate::session_migrator::write_encrypted_session_file(&path, &content)
+}
+
+/// 读取加密会话文件文本内容
+#[tauri::command]
+pub fn session_migrator_read_file(path: String) -> Result<String, String> {
+    crate::session_migrator::read_encrypted_session_file(&path)
+}
+
+/// 计算文件 SHA-256 哈希
+#[tauri::command]
+pub fn session_migrator_compute_sha256(path: String) -> Result<String, String> {
+    crate::session_migrator::compute_file_sha256(&path)
+}
+
+// ==========================================
 // 硬件性能实时监控命令
 // ==========================================
 
@@ -601,6 +683,9 @@ enum FileDialogMode {
     SaveMarkdown,
     SavePdf,
     OpenAny,
+    OpenSession,
+    SaveSession,
+    SaveExtensionSession,
 }
 
 #[cfg(windows)]
@@ -640,6 +725,24 @@ fn choose_file_path(mode: FileDialogMode) -> Option<String> {
             "选择文件或程序",
             "",
             false,
+        ),
+        FileDialogMode::OpenSession => (
+            "加密会话文件 (*.json;*.session.json)\0*.json;*.session.json\0所有文件 (*.*)\0*.*\0",
+            "选择加密会话 JSON 文件",
+            "json",
+            false,
+        ),
+        FileDialogMode::SaveSession => (
+            "Encrypted Session (*.session.json)\0*.session.json\0JSON (*.json)\0*.json\0所有文件 (*.*)\0*.*\0",
+            "保存加密会话文件",
+            "json",
+            true,
+        ),
+        FileDialogMode::SaveExtensionSession => (
+            "Extension Session (*.session.pbkdf2.json)\0*.session.pbkdf2.json\0JSON (*.json)\0*.json\0所有文件 (*.*)\0*.*\0",
+            "保存扩展兼容加密会话文件",
+            "json",
+            true,
         ),
     };
     let filter = wide_null(filter_text);

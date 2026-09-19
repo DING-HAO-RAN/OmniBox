@@ -147,6 +147,7 @@ import {
   Gauge,
   FolderLock,
   Terminal,
+  Share2,
 } from 'lucide-vue-next';
 import {
   CATEGORIES,
@@ -182,6 +183,7 @@ const iconDictionary: Record<string, any> = {
   Gauge,
   FolderLock,
   Terminal,
+  Share2,
 };
 
 /**

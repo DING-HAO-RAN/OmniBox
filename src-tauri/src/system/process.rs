@@ -82,16 +82,16 @@ pub fn launch_process(item: &LaunchItem) -> Result<u32, String> {
         let mut process_info: PROCESS_INFORMATION = std::mem::zeroed();
 
         let success = CreateProcessW(
-            ptr::null(),                   // 应用程序名称（传 NULL 时由命令行首段解析）
+            ptr::null(),                    // 应用程序名称（传 NULL 时由命令行首段解析）
             command_line_wide.as_mut_ptr(), // 命令行字符串
-            ptr::null(),                   // 进程安全属性
-            ptr::null(),                   // 线程安全属性
-            0,                             // 句柄继承选项 (false)
-            creation_flags,                // 进程创建标志
-            ptr::null(),                   // 继承环境块
-            work_dir_ptr,                  // 当前工作目录
-            &startup_info,                 // 启动参数信息
-            &mut process_info,             // 接收创建后的进程信息
+            ptr::null(),                    // 进程安全属性
+            ptr::null(),                    // 线程安全属性
+            0,                              // 句柄继承选项 (false)
+            creation_flags,                 // 进程创建标志
+            ptr::null(),                    // 继承环境块
+            work_dir_ptr,                   // 当前工作目录
+            &startup_info,                  // 启动参数信息
+            &mut process_info,              // 接收创建后的进程信息
         );
 
         if success == 0 {

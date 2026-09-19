@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod markdown_pdf;
+pub mod session_migrator;
 pub mod storage;
 pub mod system;
 
@@ -51,6 +52,18 @@ pub fn run() {
             // 系统特性一键优化禁用
             commands::get_system_tweaks,
             commands::apply_system_tweak,
+            // 浏览器会话迁移器 (Bilibili/通用会话登录器)
+            commands::session_migrator_get_defaults,
+            commands::session_migrator_launch_cdp,
+            commands::session_migrator_stop_cdp,
+            commands::session_migrator_get_cdp_status,
+            commands::session_migrator_create_launcher,
+            commands::session_migrator_choose_profile_dir,
+            commands::session_migrator_open_sessions_dir,
+            commands::session_migrator_choose_file,
+            commands::session_migrator_write_file,
+            commands::session_migrator_read_file,
+            commands::session_migrator_compute_sha256,
         ])
         .setup(|_app| {
             // 初始化阶段逻辑钩子，后续任务可在此注册插件或系统托盘

@@ -68,8 +68,8 @@ pub fn save_items_to_path(file_path: &Path, items: &[LaunchItem]) -> Result<(), 
             .map_err(|e| format!("创建配置存储目录失败 [{}]: {}", parent.display(), e))?;
     }
 
-    let json_str = serde_json::to_string_pretty(items)
-        .map_err(|e| format!("序列化启动项配置失败: {}", e))?;
+    let json_str =
+        serde_json::to_string_pretty(items).map_err(|e| format!("序列化启动项配置失败: {}", e))?;
 
     fs::write(file_path, json_str)
         .map_err(|e| format!("写入启动项配置文件失败 [{}]: {}", file_path.display(), e))?;
@@ -124,14 +124,14 @@ pub fn load_cloaked_items(app: &AppHandle) -> Result<Vec<CloakedItem>, String> {
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("读取隐藏文件记录失败: {e}"))?;
+    let content =
+        fs::read_to_string(&file_path).map_err(|e| format!("读取隐藏文件记录失败: {e}"))?;
     if content.trim().is_empty() {
         return Ok(Vec::new());
     }
 
-    let items: Vec<CloakedItem> = serde_json::from_str(&content)
-        .map_err(|e| format!("反序列化隐藏文件记录失败: {e}"))?;
+    let items: Vec<CloakedItem> =
+        serde_json::from_str(&content).map_err(|e| format!("反序列化隐藏文件记录失败: {e}"))?;
     Ok(items)
 }
 
@@ -147,10 +147,9 @@ pub fn save_cloaked_items(app: &AppHandle, items: &[CloakedItem]) -> Result<(), 
         let _ = fs::create_dir_all(parent);
     }
 
-    let json_str = serde_json::to_string_pretty(items)
-        .map_err(|e| format!("序列化隐藏文件记录失败: {e}"))?;
-    fs::write(&file_path, json_str)
-        .map_err(|e| format!("写入隐藏文件记录失败: {e}"))?;
+    let json_str =
+        serde_json::to_string_pretty(items).map_err(|e| format!("序列化隐藏文件记录失败: {e}"))?;
+    fs::write(&file_path, json_str).map_err(|e| format!("写入隐藏文件记录失败: {e}"))?;
     Ok(())
 }
 
@@ -168,14 +167,14 @@ pub fn load_app_settings(app: &AppHandle) -> Result<AppSettings, String> {
         return Ok(defaults);
     }
 
-    let content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("读取应用程序设置失败: {e}"))?;
+    let content =
+        fs::read_to_string(&file_path).map_err(|e| format!("读取应用程序设置失败: {e}"))?;
     if content.trim().is_empty() {
         return Ok(AppSettings::default());
     }
 
-    let settings: AppSettings = serde_json::from_str(&content)
-        .map_err(|e| format!("反序列化应用程序设置失败: {e}"))?;
+    let settings: AppSettings =
+        serde_json::from_str(&content).map_err(|e| format!("反序列化应用程序设置失败: {e}"))?;
     Ok(settings)
 }
 
@@ -193,8 +192,7 @@ pub fn save_app_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), 
 
     let json_str = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("序列化应用程序设置失败: {e}"))?;
-    fs::write(&file_path, json_str)
-        .map_err(|e| format!("写入应用程序设置失败: {e}"))?;
+    fs::write(&file_path, json_str).map_err(|e| format!("写入应用程序设置失败: {e}"))?;
     Ok(())
 }
 
