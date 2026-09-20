@@ -767,3 +767,65 @@ export interface SystemTweakItem {
   is_disabled: boolean;
   requires_admin: boolean;
 }
+
+/**
+ * 单个分块下载进度与区间状态 (对齐 Rust 端 `DownloadChunk`)
+ */
+export interface DownloadChunk {
+  id: number;
+  start: number;
+  end: number;
+  downloaded: number;
+  is_finished: boolean;
+}
+
+/**
+ * 下载任务状态枚举
+ */
+export type DownloadTaskStatus =
+  | 'Pending'
+  | 'Downloading'
+  | 'Paused'
+  | 'Completed'
+  | 'Failed'
+  | 'Cancelled';
+
+/**
+ * 完整下载任务模型 (对齐 Rust 端 `DownloadTask`)
+ */
+export interface DownloadTask {
+  id: string;
+  url: string;
+  file_name: string;
+  save_path: string;
+  total_bytes: number;
+  downloaded_bytes: number;
+  progress_percent: number;
+  speed_bps: number;
+  eta_seconds: number;
+  status: DownloadTaskStatus;
+  thread_count: number;
+  supports_range: boolean;
+  error_message?: string | null;
+  created_at: number;
+  chunks: DownloadChunk[];
+}
+
+/**
+ * URL 预探测元数据 (对齐 Rust 端 `UrlMeta`)
+ */
+export interface DownloadUrlMeta {
+  total_bytes: number;
+  supports_range: boolean;
+  suggested_filename: string;
+}
+
+/**
+ * 创建新任务参数 (对齐 Rust 端 `NewTaskParams`)
+ */
+export interface NewDownloadTaskParams {
+  url: string;
+  save_dir?: string | null;
+  file_name?: string | null;
+  threads?: number | null;
+}

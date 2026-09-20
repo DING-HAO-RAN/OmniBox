@@ -16,6 +16,7 @@ import PerformanceMonitorView from '../views/PerformanceMonitorView.vue';
 import SystemToolsView from '../views/SystemToolsView.vue';
 import SystemTweaksView from '../views/SystemTweaksView.vue';
 import SessionMigratorView from '../views/SessionMigratorView.vue';
+import TurboDownloaderView from '../views/TurboDownloaderView.vue';
 
 /**
  * 分类元数据信息定义
@@ -184,7 +185,18 @@ registerTool({
   order: 6,
 });
 
-// 7. 深度隐藏文件/文件夹 (超级隐藏 + 启动器协同)
+// 7. 高速多线程下载器 (TurboDownloader - 对标 PCL2 / FDM)
+registerTool({
+  id: 'turbo-downloader',
+  title: '高速下载器',
+  description: 'WinHTTP 零碎片多线程并发下载与 FDM 分片热力图',
+  iconName: 'DownloadCloud',
+  category: 'efficiency',
+  component: TurboDownloaderView,
+  order: 7,
+});
+
+// 8. 深度隐藏文件/文件夹 (超级隐藏 + 启动器协同)
 registerTool({
   id: 'file-cloaker',
   title: '深度隐藏',
@@ -192,10 +204,10 @@ registerTool({
   iconName: 'EyeOff',
   category: 'efficiency',
   component: FileCloakerView,
-  order: 7,
+  order: 8,
 });
 
-// 8. 跨设备浏览器会话迁移与免密登录器 (Bilibili/通用网站会话登录器)
+// 9. 跨设备浏览器会话迁移与免密登录器 (Bilibili/通用网站会话登录器)
 registerTool({
   id: 'session-migrator',
   title: 'B站/会话登录器',
@@ -203,10 +215,10 @@ registerTool({
   iconName: 'Share2',
   category: 'efficiency',
   component: SessionMigratorView,
-  order: 8,
+  order: 9,
 });
 
-// 9. Markdown 实时预览与 PDF 导出工作区
+// 10. Markdown 实时预览与 PDF 导出工作区
 registerTool({
   id: 'markdown-pdf',
   title: 'Markdown 转 PDF',
@@ -214,7 +226,7 @@ registerTool({
   iconName: 'FileDown',
   category: 'dev',
   component: MarkdownPdfView,
-  order: 9,
+  order: 10,
 });
 
 // 9. 通用配置中心 (单独固定在左侧栏最底部)

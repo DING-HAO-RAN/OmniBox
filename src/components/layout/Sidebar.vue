@@ -148,6 +148,7 @@ import {
   FolderLock,
   Terminal,
   Share2,
+  DownloadCloud,
 } from 'lucide-vue-next';
 import {
   CATEGORIES,
@@ -184,6 +185,7 @@ const iconDictionary: Record<string, any> = {
   FolderLock,
   Terminal,
   Share2,
+  DownloadCloud,
 };
 
 /**
