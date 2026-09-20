@@ -10,7 +10,12 @@ pub mod downloader;
 /// 启动 Tauri 桌面应用程序运行时
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let download_manager = std::sync::Arc::new(
+        downloader::DownloadManager::new().expect("初始化多线程下载管理器失败"),
+    );
+
     tauri::Builder::default()
+        .manage(download_manager)
         .invoke_handler(tauri::generate_handler![
             commands::get_memory_status,
             commands::clean_system_memory,
@@ -65,6 +70,16 @@ pub fn run() {
             commands::session_migrator_write_file,
             commands::session_migrator_read_file,
             commands::session_migrator_compute_sha256,
+            // 高速多线程下载器 (TurboDownloader)
+            downloader::commands::downloader_create_task,
+            downloader::commands::downloader_list_tasks,
+            downloader::commands::downloader_pause_task,
+            downloader::commands::downloader_resume_task,
+            downloader::commands::downloader_delete_task,
+            downloader::commands::downloader_probe_url,
+            downloader::commands::downloader_choose_dir,
+            downloader::commands::downloader_open_file,
+            downloader::commands::downloader_open_folder,
         ])
         .setup(|_app| {
             // 初始化阶段逻辑钩子，后续任务可在此注册插件或系统托盘
