@@ -5,7 +5,7 @@ use super::types::{DownloadChunk, UrlMeta};
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
-    WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
+    WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_FLAG_SECURE,
     WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_DISPOSITION, WINHTTP_QUERY_CONTENT_LENGTH,
     WINHTTP_QUERY_CUSTOM, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
@@ -522,4 +522,176 @@ pub fn probe_url_meta(url: &str, custom_user_agent: Option<&str>) -> Result<UrlM
     } else {
         Err(format!("HTTP 网络探测失败，服务器返回异常状态码: {}", status))
     }
+}
+
+/// 使用 WinHTTP 进行 Range 分片下载或全量流式下载
+///
+/// 边拉取网络字节边通过 `on_data` 回调提供给调用方，便于调用方直接 Seek 写入目标文件。
+/// 支持传入原子取消信号以实现及时中断。
+pub fn download_range_stream<F>(
+    url: &str,
+    range: Option<(u64, u64)>,
+    custom_user_agent: Option<&str>,
+    cancel_token: &std::sync::atomic::AtomicBool,
+    mut on_data: F,
+) -> Result<u64, String>
+where
+    F: FnMut(&[u8]) -> Result<(), String>,
+{
+    let (is_https, host, port, path_and_query) = parse_url_components(url)?;
+
+    let ua = custom_user_agent.unwrap_or("Mozilla/5.0 (Windows NT 10.0; Win64; x64) OmniBox-TurboDownloader/1.0");
+    let ua_wide = to_wide_null(ua);
+    let host_wide = to_wide_null(&host);
+    let path_wide = to_wide_null(&path_and_query);
+
+    // 1. 初始化 WinHTTP 会话
+    let session = SafeHInternet::new(unsafe {
+        WinHttpOpen(
+            ua_wide.as_ptr(),
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    })
+    .ok_or_else(|| {
+        let err = unsafe { GetLastError() };
+        format!("初始化 WinHTTP 会话失败，系统错误码: {}", err)
+    })?;
+
+    // 设置超时时间 (解析 10s, 连接 10s, 发送 15s, 接收 30s)
+    unsafe {
+        WinHttpSetTimeouts(session.raw(), 10_000, 10_000, 15_000, 30_000);
+    }
+
+    // 2. 连接服务器
+    let connect = SafeHInternet::new(unsafe {
+        WinHttpConnect(session.raw(), host_wide.as_ptr(), port, 0)
+    })
+    .ok_or_else(|| {
+        let err = unsafe { GetLastError() };
+        format!("连接目标服务器 {}:{} 失败，系统错误码: {}", host, port, err)
+    })?;
+
+    let req_flags = if is_https { WINHTTP_FLAG_SECURE } else { 0 };
+
+    // 3. 打开 GET 请求
+    let get_verb = to_wide_null("GET");
+    let request = SafeHInternet::new(unsafe {
+        WinHttpOpenRequest(
+            connect.raw(),
+            get_verb.as_ptr(),
+            path_wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            req_flags,
+        )
+    })
+    .ok_or_else(|| {
+        let err = unsafe { GetLastError() };
+        format!("创建 WinHTTP GET 请求失败，系统错误码: {}", err)
+    })?;
+
+    // 4. 配置 Range 请求头
+    let (header_ptr, _header_len) = if let Some((start, end)) = range {
+        let range_header = format!("Range: bytes={}-{}\r\n", start, end);
+        let wide = to_wide_null(&range_header);
+        // 保存 wide 变量延长生命周期
+        (Some(wide), range_header.len())
+    } else {
+        (None, 0)
+    };
+
+    let send_res = match &header_ptr {
+        Some(wide) => unsafe {
+            WinHttpSendRequest(
+                request.raw(),
+                wide.as_ptr(),
+                (wide.len() - 1) as u32,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+            )
+        },
+        None => unsafe {
+            WinHttpSendRequest(
+                request.raw(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+            )
+        },
+    };
+
+    if send_res == 0 {
+        let err = unsafe { GetLastError() };
+        return Err(format!("发送 WinHTTP 下载请求失败，系统错误码: {}", err));
+    }
+
+    if unsafe { WinHttpReceiveResponse(request.raw(), std::ptr::null_mut()) } == 0 {
+        let err = unsafe { GetLastError() };
+        return Err(format!("接收 WinHTTP 响应失败，系统错误码: {}", err));
+    }
+
+    let status = unsafe { query_status_code(request.raw()) }?;
+    if status != 200 && status != 206 {
+        return Err(format!("下载请求失败，服务器返回 HTTP 状态码: {}", status));
+    }
+
+    // 5. 循环读取数据流
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut total_downloaded: u64 = 0;
+    let max_expected = range.map(|(s, e)| e.saturating_sub(s) + 1);
+
+    loop {
+        if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("download_cancelled".to_string());
+        }
+
+        let mut bytes_read = 0u32;
+        let to_read = if let Some(expected) = max_expected {
+            let remaining = expected.saturating_sub(total_downloaded);
+            if remaining == 0 {
+                break;
+            }
+            (remaining as usize).min(buffer.len()) as u32
+        } else {
+            buffer.len() as u32
+        };
+
+        let read_ok = unsafe {
+            WinHttpReadData(
+                request.raw(),
+                buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                to_read,
+                &mut bytes_read,
+            )
+        };
+
+        if read_ok == 0 {
+            let err = unsafe { GetLastError() };
+            return Err(format!("读取网络数据流失败，系统错误码: {}", err));
+        }
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        on_data(&buffer[..bytes_read as usize])?;
+        total_downloaded += bytes_read as u64;
+
+        if let Some(expected) = max_expected {
+            if total_downloaded >= expected {
+                break;
+            }
+        }
+    }
+
+    Ok(total_downloaded)
 }

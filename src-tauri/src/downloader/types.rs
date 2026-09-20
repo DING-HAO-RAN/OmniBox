@@ -80,3 +80,63 @@ pub struct UrlMeta {
     /// 服务端建议文件名或根据 URL 提取的默认文件名
     pub suggested_filename: String,
 }
+
+/// 创建新下载任务的参数
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct NewTaskParams {
+    /// 下载目标链接
+    pub url: String,
+    /// 保存目录 (若为 None 则使用默认下载目录)
+    pub save_dir: Option<String>,
+    /// 自定义保存文件名 (若为 None 则自动解析)
+    pub file_name: Option<String>,
+    /// 并发分块线程数 (1 ~ 32，若为 None 则默认 4)
+    pub threads: Option<usize>,
+}
+
+impl DownloadTask {
+    /// 获取未完成的分片列表引用
+    pub fn get_unfinished_chunks(&self) -> Vec<DownloadChunk> {
+        self.chunks
+            .iter()
+            .filter(|c| !c.is_finished && c.downloaded < (c.end.saturating_sub(c.start) + 1))
+            .cloned()
+            .collect()
+    }
+
+    /// 伴生临时文件路径 (.downloading)
+    pub fn downloading_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(format!("{}.downloading", self.save_path))
+    }
+
+    /// 伴生断点续传元数据路径 (.part.json)
+    pub fn part_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(format!("{}.part.json", self.save_path))
+    }
+
+    /// 根据各分片游标重新汇总已下载总量与进度百分比
+    pub fn refresh_progress_from_chunks(&mut self) {
+        if self.chunks.is_empty() {
+            return;
+        }
+
+        let mut sum_downloaded = 0u64;
+        let mut all_finished = true;
+
+        for chunk in &self.chunks {
+            sum_downloaded = sum_downloaded.saturating_add(chunk.downloaded);
+            if !chunk.is_finished {
+                all_finished = false;
+            }
+        }
+
+        self.downloaded_bytes = sum_downloaded;
+        if self.total_bytes > 0 {
+            let percent = (self.downloaded_bytes as f64 / self.total_bytes as f64) * 100.0;
+            self.progress_percent = (percent * 100.0).round() / 100.0;
+            if self.downloaded_bytes >= self.total_bytes && all_finished {
+                self.progress_percent = 100.0;
+            }
+        }
+    }
+}

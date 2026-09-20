@@ -304,3 +304,628 @@ fn test_probe_url_meta_with_mock_no_range_server() {
 
     let _ = server_handle.join();
 }
+
+#[test]
+fn test_speed_tracker_calculation() {
+    use super::engine::SpeedTracker;
+    use std::time::Duration;
+
+    let mut tracker = SpeedTracker::new(Duration::from_secs(2));
+
+    // 初次采样由于无历史样本，速度与 ETA 应为 0
+    let (s1, e1) = tracker.update(1000, 10000);
+    assert_eq!(s1, 0);
+    assert_eq!(e1, 0);
+
+    // 稍微等待微小间隔再次采样
+    std::thread::sleep(Duration::from_millis(100));
+    let (s2, e2) = tracker.update(11000, 1_000_000);
+    // 100ms 内下载了 10000 字节 -> 大约 100,000 字节/秒
+    assert!(s2 > 0);
+    assert!(e2 > 0);
+
+    // 重置后
+    tracker.reset();
+    let (s3, e3) = tracker.update(12000, 1_000_000);
+    assert_eq!(s3, 0);
+    assert_eq!(e3, 0);
+}
+
+#[test]
+fn test_part_file_save_and_load() {
+    use super::engine::{load_part_file, save_part_file};
+    use super::types::{DownloadChunk, DownloadTask, TaskStatus};
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "omnibox_part_test_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let save_file = temp_dir.join("sample_data.bin");
+    let task = DownloadTask {
+        id: "task-part-test-01".to_string(),
+        url: "http://example.com/data.bin".to_string(),
+        file_name: "sample_data.bin".to_string(),
+        save_path: save_file.to_string_lossy().to_string(),
+        total_bytes: 4096,
+        downloaded_bytes: 2048,
+        progress_percent: 50.0,
+        speed_bps: 1024,
+        eta_seconds: 2,
+        status: TaskStatus::Paused,
+        thread_count: 2,
+        supports_range: true,
+        error_message: None,
+        created_at: 1710000000,
+        chunks: vec![
+            DownloadChunk {
+                id: 0,
+                start: 0,
+                end: 2047,
+                downloaded: 2048,
+                is_finished: true,
+            },
+            DownloadChunk {
+                id: 1,
+                start: 2048,
+                end: 4095,
+                downloaded: 0,
+                is_finished: false,
+            },
+        ],
+    };
+
+    // 保存 .part.json
+    save_part_file(&task).expect("保存 .part.json 失败");
+    let part_path = task.part_path();
+    assert!(part_path.exists());
+
+    // 加载并验证一致性
+    let loaded = load_part_file(&part_path).expect("读取 .part.json 失败");
+    assert_eq!(loaded.id, task.id);
+    assert_eq!(loaded.total_bytes, task.total_bytes);
+    assert_eq!(loaded.chunks.len(), 2);
+    assert_eq!(loaded.chunks[0].is_finished, true);
+    assert_eq!(loaded.chunks[1].downloaded, 0);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_download_manager_db_persistence() {
+    use super::engine::DownloadManager;
+    use super::types::{DownloadChunk, DownloadTask, TaskStatus};
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "omnibox_mgr_db_test_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let db_path = temp_dir.join("tasks.json");
+
+    let _manager = DownloadManager::new_with_db_path(db_path.clone()).expect("初始化管理器失败");
+
+    // 伪造一个任务写入数据库
+    let task = DownloadTask {
+        id: "persist-id-001".to_string(),
+        url: "http://example.com/app.exe".to_string(),
+        file_name: "app.exe".to_string(),
+        save_path: temp_dir.join("app.exe").to_string_lossy().to_string(),
+        total_bytes: 1000,
+        downloaded_bytes: 500,
+        progress_percent: 50.0,
+        speed_bps: 100,
+        eta_seconds: 5,
+        status: TaskStatus::Downloading, // 写入时是 Downloading
+        thread_count: 2,
+        supports_range: true,
+        error_message: None,
+        created_at: 1710000000,
+        chunks: vec![DownloadChunk {
+            id: 0,
+            start: 0,
+            end: 999,
+            downloaded: 500,
+            is_finished: false,
+        }],
+    };
+
+    let task_json = serde_json::to_string_pretty(&vec![task]).unwrap();
+    std::fs::write(&db_path, task_json).unwrap();
+
+    // 重新创建 DownloadManager，测试加载历史任务并将 Downloading 自动恢复为 Paused
+    let restored_mgr = DownloadManager::new_with_db_path(db_path.clone()).expect("恢复管理器失败");
+    let tasks = restored_mgr.get_tasks();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id, "persist-id-001");
+    assert_eq!(tasks[0].status, TaskStatus::Paused); // 校验 Downloading 恢复为 Paused
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_concurrent_multi_thread_seek_download() {
+    use super::engine::DownloadManager;
+    use super::types::{NewTaskParams, TaskStatus};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    // 1. 生成 100KB (102,400 字节) 测试虚拟文件内容，带有确定性模式
+    const FILE_SIZE: usize = 102400;
+    let mut virtual_data = Vec::with_capacity(FILE_SIZE);
+    for i in 0..FILE_SIZE {
+        virtual_data.push((i % 251) as u8);
+    }
+    let virtual_data_arc = Arc::new(virtual_data);
+
+    // 2. 启动本地 Mock Range HTTP 服务端
+    let listener = TcpListener::bind("127.0.0.1:0").expect("绑定测试端口失败");
+    let port = listener.local_addr().unwrap().port();
+    let stop_server = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_server);
+    let data_server_clone = Arc::clone(&virtual_data_arc);
+
+    let server_handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        while !stop_clone.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let s_data = Arc::clone(&data_server_clone);
+                    thread::spawn(move || {
+                        let mut buf = [0u8; 2048];
+                        let read_res = stream.read(&mut buf);
+                        if read_res.is_err() || read_res.unwrap() == 0 {
+                            return;
+                        }
+                        let req = String::from_utf8_lossy(&buf);
+
+                        if req.starts_with("HEAD") {
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\n\
+                                 Content-Length: {}\r\n\
+                                 Accept-Ranges: bytes\r\n\
+                                 Content-Disposition: attachment; filename=\"multi_test.bin\"\r\n\
+                                 Connection: close\r\n\r\n",
+                                FILE_SIZE
+                            );
+                            let _ = stream.write_all(resp.as_bytes());
+                        } else if req.starts_with("GET") {
+                            // 检查 Range: bytes=start-end
+                            let mut range_opt = None;
+                            for line in req.lines() {
+                                let l = line.trim();
+                                if l.to_ascii_lowercase().starts_with("range: bytes=") {
+                                    let range_val = &l["range: bytes=".len()..];
+                                    let mut parts = range_val.split('-');
+                                    if let (Some(s_str), Some(e_str)) = (parts.next(), parts.next()) {
+                                        if let (Ok(s), Ok(e)) = (s_str.trim().parse::<usize>(), e_str.trim().parse::<usize>()) {
+                                            range_opt = Some((s, e));
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+
+                            if let Some((start, end)) = range_opt {
+                                let valid_end = end.min(FILE_SIZE - 1);
+                                let slice_len = if valid_end >= start { valid_end - start + 1 } else { 0 };
+                                let resp_header = format!(
+                                    "HTTP/1.1 206 Partial Content\r\n\
+                                     Content-Range: bytes {}-{}/{}\r\n\
+                                     Content-Length: {}\r\n\
+                                     Connection: close\r\n\r\n",
+                                    start, valid_end, FILE_SIZE, slice_len
+                                );
+                                let _ = stream.write_all(resp_header.as_bytes());
+                                if slice_len > 0 {
+                                    let _ = stream.write_all(&s_data[start..=valid_end]);
+                                }
+                            } else {
+                                let resp_header = format!(
+                                    "HTTP/1.1 200 OK\r\n\
+                                     Content-Length: {}\r\n\
+                                     Connection: close\r\n\r\n",
+                                    FILE_SIZE
+                                );
+                                let _ = stream.write_all(resp_header.as_bytes());
+                                let _ = stream.write_all(&s_data);
+                            }
+                        }
+                    });
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 3. 创建临时工作目录与下载管理器
+    let temp_dir = std::env::temp_dir().join(format!(
+        "omnibox_multithread_test_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let db_path = temp_dir.join("tasks.json");
+
+    let manager = DownloadManager::new_with_db_path(db_path).expect("初始化下载管理器失败");
+
+    // 4. 发起 4 线程并发下载任务
+    let target_url = format!("http://127.0.0.1:{}/download/multi_test.bin", port);
+    let params = NewTaskParams {
+        url: target_url,
+        save_dir: Some(temp_dir.to_string_lossy().to_string()),
+        file_name: Some("multi_test.bin".to_string()),
+        threads: Some(4),
+    };
+
+    let created_task = manager.create_task(params).expect("创建 4 线程下载任务失败");
+    assert_eq!(created_task.thread_count, 4);
+    assert_eq!(created_task.chunks.len(), 4);
+
+    // 5. 轮询等待下载完成 (最长 10 秒超时)
+    let start_wait = std::time::Instant::now();
+    let mut completed = false;
+    while start_wait.elapsed() < Duration::from_secs(10) {
+        if let Some(task) = manager.get_task(&created_task.id) {
+            if task.status == TaskStatus::Completed {
+                completed = true;
+                break;
+            }
+            if task.status == TaskStatus::Failed {
+                panic!("任务下载失败: {:?}", task.error_message);
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(completed, "4 线程并行下载在规定时间内未完成");
+
+    // 6. 验证最终文件、大小与零碎片 Seek 写入的数据内容一致性
+    let final_file_path = temp_dir.join("multi_test.bin");
+    assert!(final_file_path.exists(), "最终目标文件应当存在");
+
+    let downloaded_content = std::fs::read(&final_file_path).expect("读取下载得到的目标文件失败");
+    assert_eq!(downloaded_content.len(), FILE_SIZE);
+    assert_eq!(downloaded_content, *virtual_data_arc, "下载文件内容与原始数据不一致！零碎片 Seek 写入异常");
+
+    // 7. 验证伴生文件与临时文件已被彻底清理
+    let downloading_path = temp_dir.join("multi_test.bin.downloading");
+    let part_path = temp_dir.join("multi_test.bin.part.json");
+    assert!(!downloading_path.exists(), ".downloading 临时文件未被清理");
+    assert!(!part_path.exists(), ".part.json 伴生文件未被清理");
+
+    // 8. 优雅停止服务器并清理
+    stop_server.store(true, Ordering::Relaxed);
+    let _ = server_handle.join();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_pause_and_resume_breakpoint_download() {
+    use super::engine::{save_part_file, DownloadManager};
+    use super::types::{DownloadChunk, DownloadTask, TaskStatus};
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    // 1. 生成 40KB (40,960 字节) 测试数据
+    const FILE_SIZE: usize = 40960;
+    let mut virtual_data = Vec::with_capacity(FILE_SIZE);
+    for i in 0..FILE_SIZE {
+        virtual_data.push(((i * 7 + 13) % 256) as u8);
+    }
+    let virtual_data_arc = Arc::new(virtual_data);
+
+    // 2. 启动本地 Mock Range HTTP Server
+    let listener = TcpListener::bind("127.0.0.1:0").expect("绑定测试端口失败");
+    let port = listener.local_addr().unwrap().port();
+    let stop_server = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_server);
+    let data_server_clone = Arc::clone(&virtual_data_arc);
+
+    let server_handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        while !stop_clone.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let s_data = Arc::clone(&data_server_clone);
+                    thread::spawn(move || {
+                        let mut buf = [0u8; 2048];
+                        let read_res = stream.read(&mut buf);
+                        if read_res.is_err() || read_res.unwrap() == 0 {
+                            return;
+                        }
+                        let req = String::from_utf8_lossy(&buf);
+
+                        if req.starts_with("HEAD") {
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\n\
+                                 Content-Length: {}\r\n\
+                                 Accept-Ranges: bytes\r\n\
+                                 Content-Disposition: attachment; filename=\"resume_test.bin\"\r\n\
+                                 Connection: close\r\n\r\n",
+                                FILE_SIZE
+                            );
+                            let _ = stream.write_all(resp.as_bytes());
+                        } else if req.starts_with("GET") {
+                            let mut range_opt = None;
+                            for line in req.lines() {
+                                let l = line.trim();
+                                if l.to_ascii_lowercase().starts_with("range: bytes=") {
+                                    let range_val = &l["range: bytes=".len()..];
+                                    let mut parts = range_val.split('-');
+                                    if let (Some(s_str), Some(e_str)) = (parts.next(), parts.next()) {
+                                        if let (Ok(s), Ok(e)) = (s_str.trim().parse::<usize>(), e_str.trim().parse::<usize>()) {
+                                            range_opt = Some((s, e));
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+
+                            if let Some((start, end)) = range_opt {
+                                let valid_end = end.min(FILE_SIZE - 1);
+                                let slice_len = if valid_end >= start { valid_end - start + 1 } else { 0 };
+                                let resp_header = format!(
+                                    "HTTP/1.1 206 Partial Content\r\n\
+                                     Content-Range: bytes {}-{}/{}\r\n\
+                                     Content-Length: {}\r\n\
+                                     Connection: close\r\n\r\n",
+                                    start, valid_end, FILE_SIZE, slice_len
+                                );
+                                let _ = stream.write_all(resp_header.as_bytes());
+                                if slice_len > 0 {
+                                    let _ = stream.write_all(&s_data[start..=valid_end]);
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 3. 构造断点现场：分片 0 已完成，分片 1 完成一半，分片 2、3 未开始
+    let temp_dir = std::env::temp_dir().join(format!(
+        "omnibox_resume_test_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let final_save_path = temp_dir.join("resume_test.bin");
+    let downloading_path = temp_dir.join("resume_test.bin.downloading");
+
+    // 预先写入已下载的碎片数据至 .downloading 文件 (分片 0 全部 10240 字节，分片 1 前 5120 字节)
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&downloading_path)
+            .expect("创建断点临时文件失败");
+        f.set_len(FILE_SIZE as u64).unwrap();
+        // 写入分片 0
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(&virtual_data_arc[0..10240]).unwrap();
+        // 写入分片 1 的前 5120 字节
+        f.seek(SeekFrom::Start(10240)).unwrap();
+        f.write_all(&virtual_data_arc[10240..15360]).unwrap();
+    }
+
+    let initial_task = DownloadTask {
+        id: "resume-test-uuid".to_string(),
+        url: format!("http://127.0.0.1:{}/download/resume_test.bin", port),
+        file_name: "resume_test.bin".to_string(),
+        save_path: final_save_path.to_string_lossy().to_string(),
+        total_bytes: FILE_SIZE as u64,
+        downloaded_bytes: 15360,
+        progress_percent: 37.5,
+        speed_bps: 0,
+        eta_seconds: 0,
+        status: TaskStatus::Paused,
+        thread_count: 4,
+        supports_range: true,
+        error_message: None,
+        created_at: 1710000000,
+        chunks: vec![
+            DownloadChunk {
+                id: 0,
+                start: 0,
+                end: 10239,
+                downloaded: 10240,
+                is_finished: true,
+            },
+            DownloadChunk {
+                id: 1,
+                start: 10240,
+                end: 20479,
+                downloaded: 5120,
+                is_finished: false,
+            },
+            DownloadChunk {
+                id: 2,
+                start: 20480,
+                end: 30719,
+                downloaded: 0,
+                is_finished: false,
+            },
+            DownloadChunk {
+                id: 3,
+                start: 30720,
+                end: 40959,
+                downloaded: 0,
+                is_finished: false,
+            },
+        ],
+    };
+
+    // 保存伴生 .part.json
+    save_part_file(&initial_task).expect("写入断点元数据失败");
+
+    // 保存任务数据库
+    let db_path = temp_dir.join("tasks.json");
+    let json_list = serde_json::to_string_pretty(&vec![initial_task.clone()]).unwrap();
+    std::fs::write(&db_path, json_list).unwrap();
+
+    // 4. 通过 DownloadManager 加载并执行 resume_task
+    let manager = DownloadManager::new_with_db_path(db_path).expect("加载断点管理器失败");
+    manager.resume_task("resume-test-uuid").expect("继续断点下载失败");
+
+    // 5. 轮询等待任务自动从断点拉取剩余字节并完成
+    let start_wait = std::time::Instant::now();
+    let mut completed = false;
+    while start_wait.elapsed() < Duration::from_secs(10) {
+        if let Some(t) = manager.get_task("resume-test-uuid") {
+            if t.status == TaskStatus::Completed {
+                completed = true;
+                break;
+            }
+            if t.status == TaskStatus::Failed {
+                panic!("断点续传任务失败: {:?}", t.error_message);
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(completed, "断点续传任务超时未完成");
+
+    // 6. 验证最终文件存在且内容完全一致
+    assert!(final_save_path.exists());
+    let res = std::fs::read(&final_save_path).expect("读取断点恢复后的文件失败");
+    assert_eq!(res.len(), FILE_SIZE);
+    assert_eq!(res, *virtual_data_arc, "断点续传后的文件与预期内容不匹配！");
+
+    stop_server.store(true, Ordering::Relaxed);
+    let _ = server_handle.join();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_fallback_single_thread_stream_download() {
+    use super::engine::DownloadManager;
+    use super::types::{NewTaskParams, TaskStatus};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    // 1. 生成 16KB 虚拟数据
+    const FILE_SIZE: usize = 16384;
+    let mut virtual_data = Vec::with_capacity(FILE_SIZE);
+    for i in 0..FILE_SIZE {
+        virtual_data.push(((i * 3 + 1) % 256) as u8);
+    }
+    let virtual_data_arc = Arc::new(virtual_data);
+
+    // 2. 启动本地 Mock 不支持 Range 的 HTTP Server
+    let listener = TcpListener::bind("127.0.0.1:0").expect("绑定测试端口失败");
+    let port = listener.local_addr().unwrap().port();
+    let stop_server = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_server);
+    let data_clone = Arc::clone(&virtual_data_arc);
+
+    let server_handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        while !stop_clone.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let s_data = Arc::clone(&data_clone);
+                    thread::spawn(move || {
+                        let mut buf = [0u8; 1024];
+                        let read_res = stream.read(&mut buf);
+                        if read_res.is_err() || read_res.unwrap() == 0 {
+                            return;
+                        }
+                        let req = String::from_utf8_lossy(&buf);
+
+                        if req.starts_with("HEAD") {
+                            // HEAD 返回 405 Method Not Allowed，强制 client fallback 到 GET
+                            let resp = "HTTP/1.1 405 Method Not Allowed\r\n\
+                                        Content-Length: 0\r\n\
+                                        Connection: close\r\n\r\n";
+                            let _ = stream.write_all(resp.as_bytes());
+                        } else if req.starts_with("GET") {
+                            // GET 返回 200 OK (不支持 Range 分块)
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\n\
+                                 Content-Length: {}\r\n\
+                                 Content-Disposition: attachment; filename=\"stream_file.bin\"\r\n\
+                                 Connection: close\r\n\r\n",
+                                FILE_SIZE
+                            );
+                            let _ = stream.write_all(resp.as_bytes());
+                            let _ = stream.write_all(&s_data);
+                        }
+                    });
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 3. 创建临时环境与下载管理器
+    let temp_dir = std::env::temp_dir().join(format!(
+        "omnibox_fallback_test_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let db_path = temp_dir.join("tasks.json");
+
+    let manager = DownloadManager::new_with_db_path(db_path).expect("初始化下载管理器失败");
+
+    // 4. 发起下载，要求 4 线程，但服务端不支持 Range，应当自动降级为 1 线程流式拉取
+    let target_url = format!("http://127.0.0.1:{}/stream_file.bin", port);
+    let params = NewTaskParams {
+        url: target_url,
+        save_dir: Some(temp_dir.to_string_lossy().to_string()),
+        file_name: Some("stream_file.bin".to_string()),
+        threads: Some(4),
+    };
+
+    let created_task = manager.create_task(params).expect("创建流式任务失败");
+    assert!(!created_task.supports_range);
+    assert_eq!(created_task.chunks.len(), 1); // 自动降级为 1 个分片
+
+    // 5. 轮询等待下载完成
+    let start_wait = std::time::Instant::now();
+    let mut completed = false;
+    while start_wait.elapsed() < Duration::from_secs(10) {
+        if let Some(t) = manager.get_task(&created_task.id) {
+            if t.status == TaskStatus::Completed {
+                completed = true;
+                break;
+            }
+            if t.status == TaskStatus::Failed {
+                panic!("单线程回退下载失败: {:?}", t.error_message);
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(completed, "单线程流式下载超时");
+
+    // 6. 校验文件完整性
+    let final_path = temp_dir.join("stream_file.bin");
+    assert!(final_path.exists());
+    let content = std::fs::read(&final_path).expect("读取流式文件失败");
+    assert_eq!(content.len(), FILE_SIZE);
+    assert_eq!(content, *virtual_data_arc);
+
+    stop_server.store(true, Ordering::Relaxed);
+    let _ = server_handle.join();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
