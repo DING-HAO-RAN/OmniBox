@@ -5,6 +5,7 @@ pub mod markdown_pdf;
 pub mod session_migrator;
 pub mod storage;
 pub mod system;
+pub mod downloader;
 
 /// 启动 Tauri 桌面应用程序运行时
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

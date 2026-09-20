@@ -44,6 +44,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_NetworkManagement_WiFi",
     "Win32_Networking_WinSock",
+    "Win32_Networking_WinHttp",
     "Win32_Graphics_Gdi",
     "Win32_System_Services",
     "Win32_System_Performance",
