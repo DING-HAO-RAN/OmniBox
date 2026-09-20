@@ -9,25 +9,25 @@
       <span>已完成 {{ finishedCount }} / {{ chunks.length }} 块</span>
     </div>
 
-    <!-- 连续分片微型条形矩阵 -->
-    <div class="flex items-center gap-1 w-full h-3.5 bg-black/40 p-0.5 rounded-md border border-white/5 overflow-hidden">
+    <!-- 连续分片微型条形矩阵 (允许 Tooltip 向上溢出浮动) -->
+    <div class="flex items-center gap-1 w-full h-3.5 bg-black/40 p-0.5 rounded-md border border-white/5 relative z-10">
       <div
         v-for="chunk in chunks"
         :key="chunk.id"
-        class="h-full rounded-sm transition-all duration-300 relative group flex-1 min-w-[6px] overflow-hidden"
+        class="h-full rounded-sm transition-all duration-300 relative group flex-1 min-w-[6px]"
         :class="getChunkBgClass(chunk)"
         :title="getChunkTooltip(chunk)"
       >
         <!-- 正在下载时的分片内部进度填充条 -->
         <div
           v-if="!chunk.is_finished && chunk.downloaded > 0"
-          class="h-full bg-blue-400/90 transition-all duration-200"
+          class="h-full bg-blue-400/90 rounded-sm transition-all duration-200 overflow-hidden pointer-events-none"
           :style="{ width: `${getChunkPercent(chunk)}%` }"
         ></div>
 
         <!-- 悬浮精美 Tooltip 浮层 -->
         <div
-          class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center pointer-events-none z-30"
+          class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-50 animate-in fade-in zoom-in-95 duration-100"
         >
           <div
             class="px-2.5 py-1.5 rounded-lg bg-[#1f242d] border border-white/10 text-[10px] font-mono text-gray-200 whitespace-nowrap shadow-xl shadow-black/80 space-y-0.5"

@@ -163,6 +163,9 @@ import { ref, watch, nextTick } from 'vue';
 import { DownloadCloud, X, Search, Loader2, FolderOpen, Download } from 'lucide-vue-next';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import type { DownloadUrlMeta, NewDownloadTaskParams } from '../../types/module';
+import { useToast } from '../../composables/useToast';
+
+const { toast } = useToast();
 
 const props = defineProps<{
   visible: boolean;
@@ -284,10 +287,11 @@ async function handleSubmit() {
     if (isTauri()) {
       await invoke('downloader_create_task', { params });
     }
+    toast.success('下载任务已创建', `已开始拉取【${params.file_name || '文件'}】`);
     emit('created');
     emit('close');
   } catch (err) {
-    alert(`创建下载任务失败: ${err}`);
+    toast.error('创建下载任务失败', String(err));
   } finally {
     isSubmitting.value = false;
   }

@@ -298,7 +298,8 @@ const newModalVisible = ref(false);
 const deleteModalTask = ref<DownloadTask | null>(null);
 const deleteLocalFile = ref(false);
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let isComponentAlive = true;
 
 const filterTabs = [
   { id: 'all' as const, label: '全部' },
@@ -522,15 +523,26 @@ async function confirmDelete() {
   }
 }
 
+async function pollLoop() {
+  if (!isComponentAlive) return;
+  await fetchTasks();
+  if (!isComponentAlive) return;
+
+  // 动态频率轮询：有活跃下载任务时 600ms 刷新保证热力图顺畅，空闲时降频至 2000ms 减少 IPC
+  const hasActive = tasks.value.some((t) => t.status === 'Downloading' || t.status === 'Pending');
+  const delay = hasActive ? 600 : 2000;
+  pollTimer = setTimeout(pollLoop, delay);
+}
+
 onMounted(() => {
-  fetchTasks();
-  // 动态频率轮询：有任务时 700ms 轮询保证热力图顺畅
-  pollTimer = setInterval(fetchTasks, 700);
+  isComponentAlive = true;
+  pollLoop();
 });
 
 onUnmounted(() => {
+  isComponentAlive = false;
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
 });
