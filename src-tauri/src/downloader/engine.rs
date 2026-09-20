@@ -129,8 +129,10 @@ pub fn generate_task_uuid() -> String {
 pub struct DownloadManager {
     /// 任务列表集合 (线程安全)
     tasks: Arc<Mutex<HashMap<String, DownloadTask>>>,
-    /// 任务取消/暂停中断信号映射表
-    cancel_tokens: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// 任务取消/暂停中断信号映射表与运行代数: (代数ID, CancelToken)
+    cancel_tokens: Arc<Mutex<HashMap<String, (u64, Arc<AtomicBool>)>>>,
+    /// 任务运行代数生成计数器
+    generation_counter: Arc<Mutex<HashMap<String, u64>>>,
     /// 任务清单持久化 JSON 文件路径
     db_path: PathBuf,
 }
@@ -146,6 +148,7 @@ impl DownloadManager {
         let manager = Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            generation_counter: Arc::new(Mutex::new(HashMap::new())),
             db_path,
         };
 
@@ -276,9 +279,16 @@ impl DownloadManager {
 
         // 4. 登记任务与中断信号
         let cancel_token = Arc::new(AtomicBool::new(false));
+        let generation_id = {
+            let mut gen_guard = self.generation_counter.lock().map_err(|e| e.to_string())?;
+            let current = gen_guard.entry(task.id.clone()).or_insert(0);
+            *current += 1;
+            *current
+        };
+
         {
             let mut tokens = self.cancel_tokens.lock().map_err(|e| e.to_string())?;
-            tokens.insert(task.id.clone(), Arc::clone(&cancel_token));
+            tokens.insert(task.id.clone(), (generation_id, Arc::clone(&cancel_token)));
 
             let mut tasks_map = self.tasks.lock().map_err(|e| e.to_string())?;
             tasks_map.insert(task.id.clone(), task.clone());
@@ -288,19 +298,19 @@ impl DownloadManager {
         let _ = self.save_tasks_to_disk();
 
         // 5. 启动后台执行下载 Worker
-        self.spawn_download_worker(&task.id, cancel_token)?;
+        self.spawn_download_worker(&task.id, cancel_token, generation_id)?;
 
         Ok(task)
     }
 
     /// 暂停正在下载的任务
     pub fn pause_task(&self, id: &str) -> Result<(), String> {
-        let token = {
+        let token_entry = {
             let tokens = self.cancel_tokens.lock().map_err(|e| e.to_string())?;
             tokens.get(id).cloned()
         };
 
-        if let Some(token) = token {
+        if let Some((_, token)) = token_entry {
             token.store(true, Ordering::Relaxed);
         }
 
@@ -357,13 +367,20 @@ impl DownloadManager {
         }
 
         let cancel_token = Arc::new(AtomicBool::new(false));
+        let generation_id = {
+            let mut gen_guard = self.generation_counter.lock().map_err(|e| e.to_string())?;
+            let current = gen_guard.entry(id.to_string()).or_insert(0);
+            *current += 1;
+            *current
+        };
+
         {
             let mut tokens = self.cancel_tokens.lock().map_err(|e| e.to_string())?;
-            tokens.insert(id.to_string(), Arc::clone(&cancel_token));
+            tokens.insert(id.to_string(), (generation_id, Arc::clone(&cancel_token)));
         }
 
         let _ = self.save_tasks_to_disk();
-        self.spawn_download_worker(id, cancel_token)?;
+        self.spawn_download_worker(id, cancel_token, generation_id)?;
 
         Ok(())
     }
@@ -371,11 +388,11 @@ impl DownloadManager {
     /// 取消或删除任务
     pub fn cancel_task(&self, id: &str, delete_file: bool) -> Result<(), String> {
         // 先发送中断信号
-        let token = {
+        let token_entry = {
             let mut tokens = self.cancel_tokens.lock().map_err(|e| e.to_string())?;
             tokens.remove(id)
         };
-        if let Some(token) = token {
+        if let Some((_, token)) = token_entry {
             token.store(true, Ordering::Relaxed);
         }
 
@@ -396,17 +413,28 @@ impl DownloadManager {
         if let Some(task) = task_opt {
             if delete_file {
                 let downloading = task.downloading_path();
-                if downloading.exists() {
-                    let _ = fs::remove_file(downloading);
-                }
                 let part = task.part_path();
-                if part.exists() {
-                    let _ = fs::remove_file(part);
-                }
                 let final_path = PathBuf::from(&task.save_path);
-                if final_path.exists() {
-                    let _ = fs::remove_file(final_path);
-                }
+
+                // 启动后台重试线程安全删除，避免 Windows 文件占用删除报错
+                thread::spawn(move || {
+                    for _ in 0..6 {
+                        thread::sleep(Duration::from_millis(150));
+                        let mut all_removed = true;
+                        if downloading.exists() && fs::remove_file(&downloading).is_err() {
+                            all_removed = false;
+                        }
+                        if part.exists() && fs::remove_file(&part).is_err() {
+                            all_removed = false;
+                        }
+                        if final_path.exists() && fs::remove_file(&final_path).is_err() {
+                            all_removed = false;
+                        }
+                        if all_removed {
+                            break;
+                        }
+                    }
+                });
             }
         }
 
@@ -415,13 +443,14 @@ impl DownloadManager {
     }
 
     /// 后台启动执行任务的多线程 Seek 写入与测速协调主循环
-    fn spawn_download_worker(&self, task_id: &str, cancel_token: Arc<AtomicBool>) -> Result<(), String> {
+    fn spawn_download_worker(&self, task_id: &str, cancel_token: Arc<AtomicBool>, generation_id: u64) -> Result<(), String> {
         let task_id = task_id.to_string();
         let tasks_arc = Arc::clone(&self.tasks);
+        let cancel_tokens_arc = Arc::clone(&self.cancel_tokens);
         let db_path = self.db_path.clone();
 
         thread::spawn(move || {
-            execute_download_coordinator(task_id, tasks_arc, cancel_token, db_path);
+            execute_download_coordinator(task_id, tasks_arc, cancel_token, generation_id, cancel_tokens_arc, db_path);
         });
 
         Ok(())
@@ -455,6 +484,8 @@ fn execute_download_coordinator(
     task_id: String,
     tasks_arc: Arc<Mutex<HashMap<String, DownloadTask>>>,
     cancel_token: Arc<AtomicBool>,
+    generation_id: u64,
+    cancel_tokens_arc: Arc<Mutex<HashMap<String, (u64, Arc<AtomicBool>)>>>,
     db_path: PathBuf,
 ) {
     // 1. 获取任务初始信息
@@ -614,8 +645,8 @@ fn execute_download_coordinator(
 
         let handle = thread::spawn(move || {
             let mut current_offset = initial_downloaded;
-            let range = if initial_downloaded > 0 {
-                // 若已有部分下载且尝试单线程续传
+            let range = if supports_range && total_bytes > 0 && initial_downloaded > 0 && initial_downloaded < total_bytes {
+                // 仅当服务端支持 Range 且已知总大小时，才构造分片续传
                 Some((initial_downloaded, total_bytes.saturating_sub(1)))
             } else {
                 None
@@ -713,6 +744,20 @@ fn execute_download_coordinator(
     drop(shared_file);
 
     // 7. 结算分析：判断是取消暂停、出错还是成功完成
+    let is_stale_generation = {
+        let tokens_guard = cancel_tokens_arc.lock().unwrap();
+        if let Some(&(current_gen, _)) = tokens_guard.get(&task_id) {
+            current_gen != generation_id
+        } else {
+            false
+        }
+    };
+
+    if is_stale_generation {
+        // 如果已经被新一代协调器接替，放弃退出状态覆盖
+        return;
+    }
+
     if cancel_token.load(Ordering::Relaxed) {
         // 用户暂停或取消
         let mut guard = tasks_arc.lock().unwrap();
