@@ -11,6 +11,7 @@ pub mod settings;
 pub mod sys_tools;
 pub mod tweaks;
 pub mod types;
+pub mod unrestrict;
 
 pub use hardware::{
     get_hardware_performance, HardwarePerformance, RuntimeDiskInfo, RuntimeNetworkInfo,
@@ -23,6 +24,10 @@ pub use process::launch_process;
 pub use sys_tools::{get_system_tools_list, launch_tool_command, SystemToolItem};
 pub use tweaks::{get_all_tweaks, toggle_tweak, SystemTweakItem};
 pub use types::{AppSettings, CleanResult, CloakedItem, LaunchItem, MemoryStatus};
+pub use unrestrict::{
+    get_restriction_overview, unrestrict_all_everything, unrestrict_all_network,
+    unrestrict_all_usb, RestrictionOverview, UnrestrictReport, UnrestrictStepResult,
+};
 
 #[cfg(test)]
 mod tests;

@@ -15,6 +15,7 @@ import SettingsView from '../views/SettingsView.vue';
 import PerformanceMonitorView from '../views/PerformanceMonitorView.vue';
 import SystemToolsView from '../views/SystemToolsView.vue';
 import SystemTweaksView from '../views/SystemTweaksView.vue';
+import SystemUnblockView from '../views/SystemUnblockView.vue';
 import SessionMigratorView from '../views/SessionMigratorView.vue';
 import TurboDownloaderView from '../views/TurboDownloaderView.vue';
 
@@ -172,6 +173,17 @@ registerTool({
   category: 'system',
   component: SystemTweaksView,
   order: 5,
+});
+
+// 6. 系统使用限制深度解除控制面板 (USB 与网络使用限制全量解除)
+registerTool({
+  id: 'system-unblocker',
+  title: '限制解除',
+  description: '一键使用一切底层手段解除 USB 存储封锁与网络策略限制',
+  iconName: 'Unlock',
+  category: 'system',
+  component: SystemUnblockView,
+  order: 6,
 });
 
 // 6. 一键启动器视图 (Task 5 已正式接入)

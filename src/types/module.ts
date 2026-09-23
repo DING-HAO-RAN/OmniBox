@@ -829,3 +829,45 @@ export interface NewDownloadTaskParams {
   file_name?: string | null;
   threads?: number | null;
 }
+
+// ==========================================
+// 系统限制解除模块接口定义 (对齐 Rust unrestrict.rs)
+// ==========================================
+
+/**
+ * 单个限制检测/解除项执行状态
+ */
+export interface UnrestrictStepResult {
+  id: string;
+  title: string;
+  category: 'usb' | 'network';
+  status: 'fixed' | 'clean' | 'warning' | 'failed';
+  message: string;
+  details?: string | null;
+}
+
+/**
+ * 限制解除综合执行报告
+ */
+export interface UnrestrictReport {
+  success: boolean;
+  total_steps: number;
+  fixed_count: number;
+  clean_count: number;
+  failed_count: number;
+  steps: UnrestrictStepResult[];
+  needs_reboot: boolean;
+  message: string;
+}
+
+/**
+ * 系统限制预检概览
+ */
+export interface RestrictionOverview {
+  usb_restricted: boolean;
+  network_restricted: boolean;
+  usb_issues_count: number;
+  network_issues_count: number;
+  details: UnrestrictStepResult[];
+}
+

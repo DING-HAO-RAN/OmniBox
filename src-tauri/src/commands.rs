@@ -563,6 +563,34 @@ pub fn apply_system_tweak(id: String, disable: bool) -> Result<(), String> {
     crate::system::toggle_tweak(&id, disable)
 }
 
+// ==========================================
+// 系统使用限制深度排查与一键全量解除命令
+// ==========================================
+
+/// 预检系统 USB 与网络限制状态
+#[tauri::command]
+pub fn get_restriction_status() -> Result<crate::system::RestrictionOverview, String> {
+    Ok(crate::system::get_restriction_overview())
+}
+
+/// 全量执行一切可用方法解除 USB 使用限制
+#[tauri::command]
+pub fn unrestrict_usb_all() -> Result<crate::system::UnrestrictReport, String> {
+    Ok(crate::system::unrestrict_all_usb())
+}
+
+/// 全量执行一切可用方法解除网络使用限制
+#[tauri::command]
+pub fn unrestrict_network_all() -> Result<crate::system::UnrestrictReport, String> {
+    Ok(crate::system::unrestrict_all_network())
+}
+
+/// 一键使用一切方法全量解除系统所有限制 (USB + 网络)
+#[tauri::command]
+pub fn unrestrict_everything() -> Result<crate::system::UnrestrictReport, String> {
+    Ok(crate::system::unrestrict_all_everything())
+}
+
 /// 打开 Markdown 文件并返回规范化路径与 UTF-8 文本。
 #[tauri::command]
 pub fn read_markdown_file(path: String) -> Result<MarkdownDocument, String> {

@@ -149,6 +149,7 @@ import {
   Terminal,
   Share2,
   DownloadCloud,
+  Unlock,
 } from 'lucide-vue-next';
 import {
   CATEGORIES,
@@ -186,6 +187,7 @@ const iconDictionary: Record<string, any> = {
   Terminal,
   Share2,
   DownloadCloud,
+  Unlock,
 };
 
 /**

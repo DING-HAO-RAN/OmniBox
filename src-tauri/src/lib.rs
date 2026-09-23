@@ -58,6 +58,11 @@ pub fn run() {
             // 系统特性一键优化禁用
             commands::get_system_tweaks,
             commands::apply_system_tweak,
+            // 系统限制一键全量解除 (USB 与网络使用限制)
+            commands::get_restriction_status,
+            commands::unrestrict_usb_all,
+            commands::unrestrict_network_all,
+            commands::unrestrict_everything,
             // 浏览器会话迁移器 (Bilibili/通用会话登录器)
             commands::session_migrator_get_defaults,
             commands::session_migrator_launch_cdp,
